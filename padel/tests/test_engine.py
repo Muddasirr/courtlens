@@ -177,3 +177,24 @@ def test_orientation_survives_lighting_and_changes_of_ends():
                     "w": 10})
     seg[9]["F"] = None  # a segment without usable crops keeps the previous orientation
     assert P._orientation(seg) == truth
+
+
+def test_hitter_sequence_fixes_a_lone_wrong_end():
+    from types import SimpleNamespace
+
+    from padel_analyzer.engine import hitter as HT
+
+    # 5 hits alternating far / near; at the middle one the ball passes closer to a far player than the near hitter
+    frames = [10, 40, 70, 100, 130]
+    n, ball = 140, np.full((140, 2), np.nan)
+    box = np.full((n, 4, 4), np.nan)
+    kpt = np.zeros((n, 4, 17, 3), np.float32)
+    for f in frames:
+        ball[f] = (500.0, 500.0)
+        for s in range(4):
+            box[f, s] = (400, 300, 600, 700)
+            kpt[f, s, 9] = (500 + 300 * (s != (0 if f in (10, 70, 130) else 2)), 500, 1.0)
+    kpt[70, 0, 9, 0], kpt[70, 2, 9, 0] = 620.0, 560.0  # the evidence at frame 70 points the wrong way: slot 2
+    tracks = SimpleNamespace(box=box, kpt=kpt)
+    assert HT.assign(frames, tracks, ball, 30.0, same_end=0.0)[2] == 2
+    assert HT.assign(frames, tracks, ball, 30.0) == [0, 2, 0, 2, 0]

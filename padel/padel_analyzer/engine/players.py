@@ -56,6 +56,26 @@ def feet_px(box: np.ndarray, kpt: np.ndarray) -> np.ndarray:
     return np.where(ok[..., None], mid, bottom)
 
 
+def floor_m(box: np.ndarray, kpt: np.ndarray, calib: C.Calibration) -> np.ndarray:
+    """Floor position in metres. A box cut off by the bottom of the frame without visible ankles has no
+    feet in view: its bottom edge is the frame edge, not the feet (up to ~2 m short on high club cameras).
+    Those are placed from the shoulder midpoint at standing shoulder height instead (3D camera model)."""
+    m = calib.to_m(feet_px(box, kpt))
+    h = calib.image_size[1]
+    # the pose model "sees" ankles pinned to the frame edge with high confidence when the feet are out of view
+    ank = ((kpt[:, L_ANK, 2] > 0.4) & (kpt[:, R_ANK, 2] > 0.4)
+           & (kpt[:, L_ANK, 1] < h - 6) & (kpt[:, R_ANK, 1] < h - 6))
+    sh_ok = (kpt[:, 5, 2] > 0.4) & (kpt[:, 6, 2] > 0.4)
+    cut = (box[:, 3] >= h - 4) & ~ank & sh_ok
+    if cut.any():
+        sh = (kpt[cut, 5, :2] + kpt[cut, 6, :2]) / 2
+        est = C.floor_under(calib, sh, C.SHOULDER_HEIGHT_M)
+        if est is not None:
+            m = m.copy()
+            m[cut] = est
+    return m
+
+
 def torso_hist(frame: np.ndarray, kpt: np.ndarray, box: np.ndarray) -> np.ndarray | None:
     """HS histogram of the shirt (shoulders -> hips quad, else the box's upper half)."""
     h, w = frame.shape[:2]
@@ -79,7 +99,7 @@ def candidates(det: Detections, calib: C.Calibration, f: int) -> tuple[np.ndarra
     keep = np.where(b[:, 4] >= MIN_CONF)[0]
     if not len(keep):
         return keep, np.zeros((0, 2))
-    m = calib.to_m(feet_px(b[keep, :4], det.pose_kpt[f, keep]))
+    m = floor_m(b[keep, :4], det.pose_kpt[f, keep], calib)
     mx, my = FLOOR_MARGIN
     ok = (m[:, 0] > -mx) & (m[:, 0] < C.WIDTH + mx) & (m[:, 1] > -my) & (m[:, 1] < C.LENGTH + my)
     keep, m = keep[ok], m[ok]

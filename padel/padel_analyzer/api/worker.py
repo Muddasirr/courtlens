@@ -98,7 +98,7 @@ def _run(match_id: str) -> None:
                                   det_cache=folder / "detections.npz")
         (folder / "report.json").write_text(json.dumps(report))
         _update(match_id, status="done", stage=None, progress=1.0)
-    except Exception as exc:  # noqa: BLE001
+    except BaseException as exc:  # noqa: BLE001 - incl. SystemExit from kaggle_cli: never leave a job stuck
         log.exception("analysis failed")
         _update(match_id, status="failed", error=f"{exc}\n{traceback.format_exc()[-1500:]}")
 
@@ -128,8 +128,16 @@ def _run_on_kaggle(match_id: str, video: Path, calib: C.Calibration, folder: Pat
         os.link(video, job_dir / vname)  # no copy
     except OSError:
         shutil.copy(video, job_dir / vname)
-    (job_dir / "job.json").write_text(json.dumps([{"match_id": match_id, "video": vname,
-                                                   "calibration": calib.to_dict(), "max_frames": MAX_FRAMES}]))
+    job = {"match_id": match_id, "video": vname, "calibration": calib.to_dict(), "max_frames": MAX_FRAMES}
+    prev_det = folder / "detections.npz"
+    if prev_det.exists():  # re-analysis: skip detection on the GPU (the bulk of the run)
+        dname = f"{match_id}_{int(time.time())}_det.npz"
+        try:
+            os.link(prev_det, job_dir / dname)
+        except OSError:
+            shutil.copy(prev_det, job_dir / dname)
+        job["detections"] = dname
+    (job_dir / "job.json").write_text(json.dumps([job]))
     progress("upload", 0.0)
     _retry(lambda: K.push_jobs(job_dir), "Kaggle dataset upload")
     # wait until the new dataset version (with this match's video) is live: starting the GPU job earlier

@@ -6,13 +6,13 @@ Every number in a report carries a label: **measured** (from calibrated position
 
 | Event | What it is | How | Validation |
 | --- | --- | --- | --- |
-| **Hit / shot** | racket contact: time, hitter, team, court position | **audio (racket-impact sound CRNN) + video** (ball trajectory change, wrist proximity) → GBM → peaks | F1 **0.94** fused on 11 unseen tournaments (video-only 0.83); PT100 video-only 0.88 / 0.87; hitter correct 89.7 % (team 93.6 %) |
+| **Hit / shot** | racket contact: time, hitter, team, court position | **audio (racket-impact sound CRNN) + video** (ball trajectory change, wrist proximity) → GBM → peaks | F1 **0.94** fused on 11 unseen tournaments (video-only 0.83); PT100 video-only 0.88 / 0.87; hitter correct 93.3 % (team 97.0 %) on detected hits, with the alternation rule (EVAL §12) |
 | **Stroke type** | serve · forehand · backhand · smash · other | RGB clip model on the hitter crop (sees the racket) fused with a pose model | 0.79 / 0.78 accuracy |
 | **Volley** tag | contact made inside the net zone (≤ 4 m from the net) | position rule | estimated, not yet validated |
 | **Overhead** tag | contact with the wrist above the head (bandeja / víbora / smash family) | pose rule | estimated, not yet validated |
 | **Rally** | sequence of hits; start, end, length, duration, who opened it, who hit last | hits grouped by gap (4 s) + scene cuts | count within +3 % / −8 % |
 | **Pair identity** | which pair is which across camera cuts and changes of ends | DINOv2 appearance + joint linker over all segments | 113 / 113 segments on both PT100 finals (EVAL §11) |
-| **Rally winner** | team that won the point | model: P(last hitter's pair won) from the last shot, the ball after it and the opponents' reaction; or set in review | **72 %** of points on matches not trained on (guessing 58 %), labels from broadcast scoreboards |
+| **Rally winner** | team that won the point | model: P(last hitter's pair won) from the last shot, the ball after it and the opponents' reaction; or set in review | **69 %** of points on matches not trained on (guessing 56 %), labels from broadcast scoreboards (EVAL §12) |
 | **Dead ball** | between-point touches (≤ 3 hits, one pair, no exchange) are not rallies | rule | Kuwait 2025: 27 rallies for 25 points, none missed |
 
 ## Per player

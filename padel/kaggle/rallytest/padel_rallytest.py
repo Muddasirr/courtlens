@@ -42,7 +42,7 @@ def setup():
 def main() -> None:
     import subprocess
 
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "lightgbm"], check=False)
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "lightgbm", "openpyxl"], check=False)
     setup()
     import lightgbm as lgb
 
@@ -73,7 +73,8 @@ def main() -> None:
         aud = A.video_features(oof[f"t__{n}"], oof[f"p__{n}"], det.n, det.fps, det.step, float(oof[f"thr__{n}"]))
         X, nearest = E.features(bt, st, aud)
         gt = [int(round(a * det.fps)) for a, _ in hits[n]]
-        data[n] = {"X": X, "nearest": nearest, "y": E.labels(det.n, gt, radius=2), "gt": gt, "st": st, "det": det}
+        data[n] = {"X": X, "nearest": nearest, "y": E.labels(det.n, gt, radius=2), "gt": gt, "st": st, "det": det,
+                   "bt": bt}
     log("features", len(data))
     # same modality dropout as the production model (padel-fusion): copies without ball and without audio
     ball_cols = ["obs_frac", "has_ball", "cos_turn3", "cos_turn6", "speed_b3", "speed_a3", "speed_ratio3", "acc3",
@@ -135,6 +136,50 @@ def main() -> None:
                       "split": sum(c > 1 for c in counts), "lost": sum(c == 0 for c in counts),
                       "hist": {str(v): counts.count(v) for v in sorted(set(counts))}}
             log(k, json.dumps(res[k]))
+    # hitter attribution on DETECTED hits: labelled hits matched to a predicted hit within ±6 frames
+    import pandas as pd
+
+    from padel_analyzer.engine import hitter as HT
+
+    df = pd.read_excel(first("/kaggle/input/**/CVSPORTS_Padel/metadata/hit_assignments.xlsx"))
+
+    def label_of(tr, f, s):
+        x_me = (tr.box[f, s, 0] + tr.box[f, s, 2]) / 2
+        x_pa = (tr.box[f, s ^ 1, 0] + tr.box[f, s ^ 1, 2]) / 2
+        if np.isnan(x_me):
+            return None
+        left = x_me < 960 if np.isnan(x_pa) else x_me < x_pa
+        return ("t1" if s < 2 else "t2") + ("p1" if left else "p2")
+
+    labs: dict = {}
+    for _, r in df.iterrows():
+        vid = str(r["video"])
+        vid = vid if vid.endswith(".mp4") else vid + ".mp4"
+        if vid in data:
+            ts = r["timestamp"]
+            t = float(ts) if not isinstance(ts, str) else sum(float(x) * 60 ** k for k, x in enumerate(reversed(ts.split(":"))))
+            labs.setdefault(vid, []).append((int(round(t * data[vid]["det"].fps)), str(r["player"]).strip()))
+    hg = {}
+    for same_end in (0.0, 0.3, 0.6, 1.0, 2.0, 4.0):
+        hit = team = tot = miss = 0
+        for vid, ls in labs.items():
+            d = data[vid]
+            frames = [h.frame for h in pred[vid]]
+            slots = HT.assign(frames, d["st"], d["bt"].xy, d["det"].fps, same_end) if frames else []
+            for f, gt in ls:
+                near = [i for i, x in enumerate(frames) if abs(x - f) <= 6]
+                if not near:
+                    miss += 1
+                    continue
+                i = min(near, key=lambda q: abs(frames[q] - f))
+                p_ = label_of(d["st"], frames[i], slots[i]) or "t1p1"
+                tot += 1
+                hit += p_ == gt
+                team += p_[:2] == gt[:2]
+        hg[str(same_end)] = {"player": round(hit / max(tot, 1), 4), "team": round(team / max(tot, 1), 4), "n": tot,
+                             "labels_without_detected_hit": miss}
+        log("hitter on detected hits, same_end", same_end, json.dumps(hg[str(same_end)]))
+    res["hitter_on_detected_hits"] = hg
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "rallytest.json").write_text(json.dumps({"summary": res, "per_clip": per_clip}, indent=1))
 

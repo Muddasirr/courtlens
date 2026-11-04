@@ -71,3 +71,14 @@ def test_football_format_uses_the_football_model_and_thresholds(monkeypatch):
     monkeypatch.setenv("COURT_FORMAT", "5v5")
     assert action_spotting.weights_path() == "/m/tdeed_futsal.pt"
     assert action_spotting.thresholds() == action_spotting.THRESHOLDS
+
+
+def test_football_throw_ins_become_kick_ins_futsal_unchanged():
+    from app.services.action_spotting import label_map
+
+    assert label_map("11v11")["THROW IN"] == "kick_in"
+    assert "THROW IN" not in label_map("5v5")
+    spot = {"ts_ms": 500, "event_type": "kick_in", "label": "THROW IN"}
+    out = events_from_spotting([{**spot, "confidence": 0.6}], [], "A")
+    assert [c.event_type for c in out] == ["kick_in"]
+    assert events_from_spotting([{**spot, "confidence": 0.2}], [], "A") == []  # default 0.3

@@ -294,10 +294,11 @@ def _resumable(api, kernel: str, state: Path) -> dict | None:
         prior = json.loads(state.read_text())
     except (OSError, ValueError):
         return None
-    if time.time() - prior.get("pushed_at", 0) > MAX_WAIT_S:
-        return None
     try:
-        return prior if _status(api, kernel) in ("queued", "running", "complete") else None
+        status = _status(api, kernel)
+        fresh = time.time() - prior.get("pushed_at", 0) <= MAX_WAIT_S
+        # Finished while the worker was down: collect at any age (_parse checks it is this job's output)
+        return prior if status == "complete" or (fresh and status in ("queued", "running")) else None
     except Exception:  # noqa: BLE001 — can't tell ⇒ start fresh
         return None
 

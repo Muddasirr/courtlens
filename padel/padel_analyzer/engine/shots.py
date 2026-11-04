@@ -125,16 +125,57 @@ def features(hits: list[Hit], ball: BallTrack, tracks: PlayerTracks, fps: float,
     return np.asarray(rows, np.float32).reshape(len(hits), len(feature_names()))
 
 
-def tags(hits: list[Hit], tracks: PlayerTracks) -> list[tuple[bool, bool]]:
+# Overhead = the hitting wrist above the top of the head around contact. Measured over +-0.24 s (contact is
+# only known to a few frames) relative to body height. Fitted on hand-labelled Legends Arena club footage:
+# true overheads 0.12-0.18, smash calls without an overhead swing <= 0.08.
+OVERHEAD_ARM_UP = 0.11
+OVERHEAD_WINDOW_S = 0.24
+
+
+def arm_up(box: np.ndarray, kpt: np.ndarray) -> float:
+    """Max height of a wrist above the top of the head over a short sequence, in body heights (<= 0: never).
+    box (T, 4) xyxy, kpt (T, 17, 3); frames without a detection are NaN / zero confidence."""
+    hts = box[:, 3] - box[:, 1]
+    hts = hts[np.isfinite(hts)]
+    if not len(hts):
+        return 0.0
+    H = max(float(np.median(hts)), 30.0)
+    best = 0.0
+    for k in kpt:
+        head = k[:5][k[:5, 2] > 0.3, 1]
+        if not len(head):
+            continue
+        for w in (9, 10):
+            if k[w, 2] > 0.3:
+                best = max(best, (float(head.min()) - float(k[w, 1])) / H)
+    return best
+
+
+def tags(hits: list[Hit], tracks: PlayerTracks, fps: float = 25.0) -> list[tuple[bool, bool]]:
     out = []
+    n = len(tracks.kpt)
+    w = max(1, int(round(OVERHEAD_WINDOW_S * fps)))
     for h in hits:
-        k = tracks.kpt[h.frame, h.slot]
-        overhead = bool(k[0, 2] > 0.2 and min(k[9, 1] if k[9, 2] > 0.2 else 1e9, k[10, 1] if k[10, 2] > 0.2 else 1e9)
-                        < k[0, 1])
+        a, b = max(0, h.frame - w), min(n, h.frame + w + 1)
+        overhead = arm_up(tracks.box[a:b, h.slot], tracks.kpt[a:b, h.slot]) >= OVERHEAD_ARM_UP
         y = tracks.pos_m[h.frame, h.slot, 1]
         volley = bool(not np.isnan(y) and abs(y - C.NET_Y) <= C.NET_ZONE_M)
         out.append((overhead, volley))
     return out
+
+
+def gate_smash(kind: str, conf: float, probs: dict[str, float], overhead: bool, seen: bool = True) -> tuple[str, float]:
+    """A smash is an overhead stroke: without the arm up, fall back to the next most likely stroke.
+    A hitter the camera does not see (near pair below the frame) has no stroke evidence at all: 'other'."""
+    if kind != "smash" or overhead:
+        return kind, conf
+    if not seen:
+        return "other", round(float(probs.get("other", 0.0)), 3)
+    rest = {k: v for k, v in probs.items() if k != "smash"}
+    if not rest or sum(rest.values()) <= 0:
+        return "other", conf
+    best = max(rest, key=rest.get)
+    return best, round(rest[best] / sum(rest.values()), 3)
 
 
 class RGBStrokeModel:
@@ -213,7 +254,7 @@ class ShotModel:
         if not hits:
             return []
         X = features(hits, ball, tracks, fps)
-        tg = tags(hits, tracks)
+        tg = tags(hits, tracks, fps)
         if self.booster is not None:
             P = self.booster.predict(X)
         else:
@@ -224,10 +265,14 @@ class ShotModel:
             # the clip model sees the racket: it leads; pose/context keeps serve + rally position
             P[ok] = 0.7 * R[ok] + 0.3 * P[ok]
         out = []
-        for p, (overhead, volley) in zip(P, tg):
+        n = len(tracks.seen)
+        w = max(1, int(round(OVERHEAD_WINDOW_S * fps)))
+        for h, p, (overhead, volley) in zip(hits, P, tg):
             i = int(np.argmax(p))
-            out.append(Stroke(CLASSES[i], float(p[i]), {c: round(float(v), 3) for c, v in zip(CLASSES, p)},
-                              overhead, volley and CLASSES[i] != "serve"))
+            probs = {c: round(float(v), 3) for c, v in zip(CLASSES, p)}
+            seen = bool(tracks.seen[max(0, h.frame - w):min(n, h.frame + w + 1), h.slot].any())
+            kind, conf = gate_smash(CLASSES[i], float(p[i]), probs, overhead, seen)
+            out.append(Stroke(kind, conf, probs, overhead, volley and kind != "serve"))
         return out
 
 

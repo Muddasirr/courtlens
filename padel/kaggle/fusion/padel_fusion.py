@@ -77,6 +77,8 @@ def stage_fusion() -> dict:
     oof = np.load(first("/kaggle/input/**/out/audio_oof.npz"))
     calib = C.Calibration(pt100.load("F").H, (1920, 1080))
     data = {}
+    data8 = {}  # same rallies with the audio probabilities of their 8 kHz band-limited copy
+    has8 = all(f"p8__{n}" in oof.files for n in names)
     for n in names:
         det = Detections.load(det_dir / (n + ".npz"))
         tracks = P.track(det, calib)
@@ -85,6 +87,11 @@ def stage_fusion() -> dict:
         X, nearest = E.features(bt, tracks, aud)
         gt = [int(round(a * det.fps)) for a, _ in hits[n]]
         data[n] = {"X": X, "nearest": nearest, "y": E.labels(det.n, gt, radius=2), "gt": gt}
+        if has8:
+            aud8 = A.video_features(oof[f"t__{n}"][: len(oof[f"p8__{n}"])], oof[f"p8__{n}"], det.n, det.fps, det.step,
+                                    float(oof[f"thr__{n}"]))
+            X8, _ = E.features(bt, tracks, aud8)
+            data8[n] = {"X": X8}
     ball_idx = [E.FEATURES.index(c) for c in BALL_COLS]
     aud_idx = [E.FEATURES.index(c) for c in E.AUDIO_FEATURES]
 
@@ -98,6 +105,10 @@ def stage_fusion() -> dict:
         y = np.concatenate([data[n]["y"] for n in train_names])
         if dropout:
             X, y = np.vstack([X, blank(X, ball_idx), blank(X, aud_idx)]), np.concatenate([y, y, y])
+            if has8:  # low-bandwidth club audio: the same rallies heard through an 8 kHz recorder
+                X8 = np.vstack([data8[n]["X"] for n in train_names])
+                y8 = np.concatenate([data[n]["y"] for n in train_names])
+                X, y = np.vstack([X, X8, blank(X8, ball_idx)]), np.concatenate([y, y8, y8])
         return X, y
 
     def fit(train_names, dropout):
@@ -116,14 +127,18 @@ def stage_fusion() -> dict:
     res = {}
     for variant, dropout in (("fused", False), ("fused_dropout", True)):
         out = {}
-        for cond, cols in (("as_recorded", None), ("no_ball", ball_idx), ("no_audio", aud_idx)):
+        conds = [("as_recorded", None, False), ("no_ball", ball_idx, False), ("no_audio", aud_idx, False)]
+        if has8:
+            conds += [("audio_8khz", None, True), ("audio_8khz_no_ball", ball_idx, True)]
+        for cond, cols, low in conds:
             tot = [0, 0, 0]
             for test_t in fold_sets:
                 tr = [n for n in names if PA.tournament(n) not in test_t]
                 te = [n for n in names if PA.tournament(n) in test_t]
                 bst, thr = fit(tr, dropout)
                 for n in te:
-                    X = data[n]["X"] if cols is None else blank(data[n]["X"], cols)
+                    X0 = data8[n]["X"] if low else data[n]["X"]
+                    X = X0 if cols is None else blank(X0, cols)
                     hs = E.pick_peaks(bst.predict(X), data[n]["nearest"], thr, nms=8)
                     a, b, c = PA.event_f1([h.frame for h in hs], data[n]["gt"], 5)
                     tot = [tot[0] + a, tot[1] + b, tot[2] + c]
@@ -141,7 +156,7 @@ def stage_fusion() -> dict:
     _, thr = fit(names, True)
     (OUT / "models").mkdir(parents=True, exist_ok=True)
     bst.save_model(str(OUT / "models" / "hit_lgbm.txt"))
-    (OUT / "models" / "hit_lgbm.json").write_text(json.dumps({"threshold": thr, "source": "decorte+pt100 fused, modality dropout"}))
+    (OUT / "models" / "hit_lgbm.json").write_text(json.dumps({"threshold": thr, "source": "decorte+pt100 fused, modality dropout" + (", 8 kHz audio copies" if has8 else "")}))
     res["production_threshold"] = thr
     return res
 

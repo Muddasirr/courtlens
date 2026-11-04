@@ -1,0 +1,10 @@
+# Root build context is used only by gateway/Dockerfile: send just the web sources.
+*
+!gateway/
+!web/
+!frontend/src/
+!frontend/public/
+!padel/web/src/
+!padel/web/public/
+web/node_modules
+web/dist

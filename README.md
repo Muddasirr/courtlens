@@ -1,5 +1,8 @@
 # CourtLens — facility-first futsal analytics
 
+> **SportLens platform:** futsal (this app) and padel (`padel/`) are served as one product, with one sign-in,
+> facility workspace and URL, from `web/` + `gateway/` + `docker-compose.platform.yml`. See **`PLATFORM.md`**.
+
 Cloud post-match analytics for futsal facilities. Docs: `PRD.md` (requirements), `ARCHITECTURE.md` (pipeline + stat definitions), `EVAL.md` (phase gates), `PILOT.md` (pilot plan), **`ROADMAP.md` (steps and accuracy gates to production)**.
 
 ## Phases in this repo

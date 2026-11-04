@@ -2135,3 +2135,6 @@ export default function App() {
     </BrowserRouter>
   );
 }
+
+// Pages reused by the unified SportLens web app (web/), mounted at the same routes.
+export { AuthPage, FacilitiesPage, FacilityHome, MatchPage, Phase0Page, PublicReportPage, LabelPage };

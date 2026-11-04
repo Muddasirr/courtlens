@@ -48,6 +48,9 @@ Environment variables:
 | `PADEL_API_TOKEN` | – | when set, every `/api` call needs `Authorization: Bearer <token>` (the web app asks once) |
 | `PADEL_KAGGLE_TIMEOUT_S` | 32400 | stop waiting for a Kaggle GPU job after this many seconds |
 | `PADEL_CORS` | localhost:5175 | allowed browser origins |
+| `PADEL_AUTH_URL` | – | SportLens core API (e.g. `http://core-api:8000`): accept the platform sign-in JWT and scope matches to the caller's facilities (see `../PLATFORM.md`) |
+| `PADEL_MEDIA_SECRET` | random per process | signs the short-lived read-only media tokens (`GET /api/media-token`) used in video / frame / CSV URLs; set it when running more than one replica |
+| `PADEL_LEGACY_FACILITY` | – | file matches created before platform sign-in under this facility |
 
 Models (trained on Kaggle; `models/` is only needed for `PADEL_BACKEND=local`):
 - `ball.pt` (ball_v2: PT100 + Roboflow venues), `pose.pt` (players + keypoints)

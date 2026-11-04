@@ -3,7 +3,7 @@ import Calibrate from './pages/Calibrate'
 import Matches from './pages/Matches'
 import ReportPage from './pages/Report'
 
-// Hash routes: #/  ·  #/m/<id>/calibrate  ·  #/m/<id>
+// Hash routes: #/  ·  #/m/<id>/calibrate  ·  #/m/<id>  ·  #/s/<share token> (public, read-only)
 function useRoute(): string[] {
   const read = () => window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean)
   const [parts, setParts] = useState(read)
@@ -23,7 +23,10 @@ export default function App() {
   const parts = useRoute()
   let page = <Matches />
   let crumb = ''
-  if (parts[0] === 'm' && parts[1]) {
+  if (parts[0] === 's' && parts[1]) {
+    page = <ReportPage shareToken={parts[1]} />
+    crumb = 'Shared match report'
+  } else if (parts[0] === 'm' && parts[1]) {
     if (parts[2] === 'calibrate') {
       page = <Calibrate id={parts[1]} />
       crumb = 'Court calibration'

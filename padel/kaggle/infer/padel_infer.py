@@ -98,6 +98,13 @@ def main() -> None:
         try:
             video = fetch_url(job) if job.get("url") else first(f"/kaggle/input/**/{job['video']}")
             log("job", job["match_id"], video)
+            # re-analysis: the previous run's player/ball detections ride along, so only the models after
+            # detection run again (detections do not depend on the calibration or on the hit/stroke models)
+            if job.get("detections"):
+                cached = first(f"/kaggle/input/**/{job['detections']}")
+                if cached:
+                    shutil.copy(cached, out / "detections.npz")
+                    log("reusing detections", cached)
             rep = pipeline.run(video, C.Calibration.from_dict(job["calibration"]), det,
                                max_frames=job.get("max_frames", 0), det_cache=out / "detections.npz",
                                progress=lambda s, p: None)

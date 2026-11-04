@@ -112,3 +112,16 @@ def test_result_from_another_job_is_rejected():
         zf.writestr("result.json", json.dumps({"job": "other", "detections": []}))
     with pytest.raises(RuntimeError, match="expected mine"):
         KaggleTrackBackend()._parse(buf.getvalue(), "A", "mine", 1.0)
+
+
+def test_finished_run_is_collected_after_a_long_outage(tmp_path, monkeypatch):
+    """A run keeps going while the host sleeps: a finished one is collected at any age, but an
+    old run that still says running is not waited on."""
+    from app.services import kaggle_backend
+
+    state = tmp_path / "s.json"
+    state.write_text(json.dumps({"job_id": "abc", "pushed_at": kaggle_backend.time.time() - 2 * kaggle_backend.MAX_WAIT_S}))
+    monkeypatch.setattr(kaggle_backend, "_status", lambda api, kernel: "complete")
+    assert kaggle_backend._resumable(None, "k", state)["job_id"] == "abc"
+    monkeypatch.setattr(kaggle_backend, "_status", lambda api, kernel: "running")
+    assert kaggle_backend._resumable(None, "k", state) is None

@@ -7,6 +7,7 @@ top/bottom = net side, left/right = image x relative to the partner. Paper: 83.7
 """
 from __future__ import annotations
 
+import csv
 import glob
 import json
 import shutil
@@ -93,8 +94,50 @@ def main():
             left = x_me < x_pa
         pred = ("t1" if top else "t2") + ("p1" if left else "p2")
         rows.append({"video": vid, "gt": gt, "pred": pred, "status": "ok", "dist": round(float(best[0]), 3)})
+    # sequence model: labelled frames + every annotated hit of the rally, Viterbi, scored on the same labels
+    from padel_analyzer.engine import hitter as HT
+
+    onsets: dict = {}
+    with open(first("/kaggle/input/**/CVSPORTS_Padel/metadata/hits.csv")) as fh:
+        for h in csv.DictReader(fh):
+            onsets.setdefault(h["filename"], []).append(float(h["start"]))
+    labelled = {}  # video -> [(frame, gt, row index)]
+    for i, (_, r) in enumerate(df.iterrows()):
+        vid = str(r["video"])
+        vid = vid if vid.endswith(".mp4") else vid + ".mp4"
+        if vid in cache and rows[i]["status"] == "ok":
+            det = cache[vid][0]
+            ts = r["timestamp"]
+            t = float(ts) if not isinstance(ts, str) else sum(float(x) * 60 ** k for k, x in enumerate(reversed(ts.split(":"))))
+            labelled.setdefault(vid, []).append((int(round(t * det.fps)), rows[i]["gt"], i))
+
+    def label_of(tr, f, s):
+        partner = s ^ 1
+        x_me = (tr.box[f, s, 0] + tr.box[f, s, 2]) / 2
+        x_pa = (tr.box[f, partner, 0] + tr.box[f, partner, 2]) / 2 if not np.isnan(tr.box[f, partner, 0]) else None
+        if np.isnan(x_me):
+            return None
+        left = x_me < 960 if x_pa is None else x_me < x_pa
+        return ("t1" if s < 2 else "t2") + ("p1" if left else "p2")
+
+    grid = {}
+    for same_end in (0.0, 0.3, 0.6, 1.0, 2.0):
+        hit, team, tot = 0, 0, 0
+        for vid, labs in labelled.items():
+            det, tr, bt = cache[vid]
+            on = sorted(int(round(t * det.fps)) for t in onsets.get(vid, []))
+            frames = sorted(set(f for f, _, _ in labs) | {o for o in on if all(abs(o - f) > 8 for f, _, _ in labs)})
+            slots = dict(zip(frames, HT.assign(frames, tr, bt.xy, det.fps, same_end)))
+            for f, gt, _ in labs:
+                pred = label_of(tr, min(max(f, 0), det.n - 1), slots[f]) or "t1p1"
+                tot += 1
+                hit += pred == gt
+                team += pred[:2] == gt[:2]
+        grid[f"same_end={same_end}"] = {"player": round(hit / tot, 4), "team": round(team / tot, 4), "n": tot}
+        print(same_end, grid[f"same_end={same_end}"], flush=True)
     ok = [x for x in rows if x["status"] == "ok"]
     res = {
+        "sequence_grid": grid,
         "labels": len(rows), "evaluated": len(ok),
         "player_acc": round(np.mean([x["pred"] == x["gt"] for x in ok]), 4) if ok else None,
         "team_acc": round(np.mean([x["pred"][:2] == x["gt"][:2] for x in ok]), 4) if ok else None,

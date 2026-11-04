@@ -1,3 +1,4 @@
+.claude/
 .env
 .venv/
 venv/
@@ -61,3 +62,6 @@ scripts/kaggle/offline_wheels/
 scripts/kaggle/code_dataset/*.zip
 scripts/kaggle/dataset_soccertrack_mot/
 scripts/kaggle/dataset_soccertrack_match/
+.env.platform
+web/node_modules
+web/dist

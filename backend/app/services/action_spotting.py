@@ -35,6 +35,8 @@ W, H, FPS = 796, 448, 25
 PANORAMA_ASPECT = 2.2
 LABEL_TO_EVENT = {"PASS": "pass", "HIGH PASS": "pass", "CROSS": "pass", "DRIVE": "dribble", "SHOT": "shot",
                   "GOAL": "goal"}
+# Football only: M7 12 + 12 min at the default 0.3 → 4 right of 7 predicted, 11 labelled (futsal not measured).
+FOOTBALL_LABEL_TO_EVENT = {**LABEL_TO_EVENT, "THROW IN": "kick_in"}
 # Per-class confidence. Football (SoccerTrack fine-tune): the held-out sweep, best F1 on M2 + M7.
 # Futsal fine-tune: TDEED_THRESHOLDS (docker-compose; from the labelled futsal test window).
 FOOTBALL_THRESHOLDS = {"pass": 0.2, "dribble": 0.3, "shot": 0.3, "goal": 0.3}
@@ -45,6 +47,11 @@ def is_football(fmt: str | None = None) -> bool:
     from app.services.court_format import get_court_format
 
     return (fmt or get_court_format()) == "11v11"
+
+
+def label_map(fmt: str | None = None) -> dict[str, str]:
+    """Spotter labels this format's matches turn into events."""
+    return FOOTBALL_LABEL_TO_EVENT if is_football(fmt) else LABEL_TO_EVENT
 
 
 def thresholds(fmt: str | None = None) -> dict[str, float]:
@@ -224,8 +231,9 @@ def spot(video_path: str, detections: list, device: str = "cuda") -> list[dict[s
     finally:
         os.chdir(cwd)
     spotted = []  # everything ≥ 0.05 is returned; events_from_spotting applies THRESHOLDS (tunable offline)
+    labels = label_map()
     for p in raw:
-        ev = LABEL_TO_EVENT.get(p["label"])
+        ev = labels.get(p["label"])
         if ev:
             spotted.append({"ts_ms": int(round(p["frame"] * 1000 / FPS)), "label": p["label"], "event_type": ev,
                             "confidence": round(float(p["confidence"]), 3)})

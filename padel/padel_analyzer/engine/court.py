@@ -260,3 +260,90 @@ def draw(frame: np.ndarray, calib: Calibration, color=(0, 255, 255), thickness: 
         p = calib.to_px(line_points_m(0.25, [(a, b)]))
         cv2.polylines(out, [p.astype(np.int32).reshape(-1, 1, 2)], False, color, thickness, cv2.LINE_AA)
     return out
+
+
+# --- 3D camera from the floor homography -------------------------------------------------------------
+# Club cameras sit high behind one end, so the near pair's feet often leave the frame while their upper
+# body is still visible. The floor homography + a square-pixel pinhole (centred principal point) pins the
+# camera, which lets a body point at a known height (shoulders) be placed on the floor.
+
+SHOULDER_HEIGHT_M = 1.45  # median for adult club players; fitted on Legends Arena full-body samples (bias 0.02 m)
+_CAM_CACHE: dict[bytes, dict] = {}
+
+
+def camera_model(calib: Calibration) -> dict | None:
+    """{K, R, t, C, up, rms_px} or None when the homography does not give a usable camera."""
+    key = np.asarray(calib.H, np.float64).tobytes() + repr(calib.image_size).encode()
+    if key in _CAM_CACHE:
+        return _CAM_CACHE[key]
+    cam = None
+    try:
+        cam = _fit_camera(np.asarray(calib.H, np.float64), calib.image_size)
+        # a camera below the floor, absurd focal length or a poor fit means the pinhole model does not hold
+        if not (1.0 < abs(cam["C"][2]) < 40.0 and 100 < cam["K"][0, 0] < 20000 and cam["rms_px"] < 25):
+            cam = None
+    except Exception:  # noqa: BLE001 - degenerate geometry: fall back to floor-only placement
+        cam = None
+    _CAM_CACHE[key] = cam
+    return cam
+
+
+def _fit_camera(H: np.ndarray, size: tuple[int, int]) -> dict:
+    from scipy.optimize import least_squares
+
+    w, h = size
+    cx, cy = w / 2, h / 2
+    G = np.linalg.inv(H)
+    G = G / G[2, 2]
+    A = np.linalg.inv(np.array([[1, 0, cx], [0, 1, cy], [0, 0, 1.0]])) @ G
+    a1, a2 = A[:, 0], A[:, 1]
+    # |r1| = |r2| and r1.r2 = 0 each give f^2; one of them is ill-conditioned when the camera sits on an axis
+    f2 = [c for c in (-((a1[0] ** 2 + a1[1] ** 2) - (a2[0] ** 2 + a2[1] ** 2)) / (a1[2] ** 2 - a2[2] ** 2 + 1e-18),
+                      -(a1[0] * a2[0] + a1[1] * a2[1]) / (a1[2] * a2[2] + 1e-18)) if np.isfinite(c) and c > 0]
+    f = float(np.sqrt(max(f2))) if f2 else float(w)
+    K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+    M = np.linalg.inv(K) @ G
+    lam = 2 / (np.linalg.norm(M[:, 0]) + np.linalg.norm(M[:, 1]))
+    r1, r2, t = M[:, 0] * lam, M[:, 1] * lam, M[:, 2] * lam
+    if t[2] < 0:
+        r1, r2, t = -r1, -r2, -t
+    U, _, Vt = np.linalg.svd(np.c_[r1, r2, np.cross(r1, r2)])
+    rv, _ = cv2.Rodrigues(U @ Vt)
+    g = np.array([[x, y] for x in np.linspace(0, WIDTH, 11) for y in np.linspace(0, LENGTH, 21)])
+    px = project(G, g)
+    keep = (px[:, 0] > -w) & (px[:, 0] < 2 * w) & (px[:, 1] > -h) & (px[:, 1] < 2 * h)
+    g, px = g[keep], px[keep]
+
+    def res(p: np.ndarray) -> np.ndarray:
+        Rm, _ = cv2.Rodrigues(p[1:4])
+        Kp = np.array([[p[0], 0, cx], [0, p[0], cy], [0, 0, 1]])
+        q = (Kp @ (Rm @ np.c_[g, np.zeros(len(g))].T + p[4:7, None])).T
+        return (q[:, :2] / q[:, 2:] - px).ravel()
+
+    r = least_squares(res, np.r_[f, rv.ravel(), t], x_scale="jac")
+    R, _ = cv2.Rodrigues(r.x[1:4])
+    K = np.array([[r.x[0], 0, cx], [0, r.x[0], cy], [0, 0, 1]])
+    C = -R.T @ r.x[4:7]
+    return {"K": K, "R": R, "t": r.x[4:7], "C": C, "up": float(np.sign(C[2])),
+            "rms_px": float(np.sqrt(np.mean(r.fun ** 2)))}
+
+
+def floor_under(calib: Calibration, px: np.ndarray, height_m: float) -> np.ndarray | None:
+    """Floor metres under image points that are `height_m` above the floor (None without a camera model)."""
+    cam = camera_model(calib)
+    if cam is None:
+        return None
+    p = calib.undistort(np.asarray(px, np.float64).reshape(-1, 2))
+    d = (cam["R"].T @ (np.linalg.inv(cam["K"]) @ np.c_[p, np.ones(len(p))].T)).T
+    s = (cam["up"] * height_m - cam["C"][2]) / d[:, 2]
+    return cam["C"][None, :2] + s[:, None] * d[:, :2]
+
+
+def view_limit_y(calib: Calibration) -> float | None:
+    """Court y beyond which a standing player's shoulders leave the bottom of the frame (None if all in view)."""
+    w, h = calib.image_size
+    m = floor_under(calib, np.array([[w / 2, h - 1]]), SHOULDER_HEIGHT_M)
+    if m is None:
+        return None
+    y = float(m[0, 1])
+    return y if NET_Y < y < LENGTH else None

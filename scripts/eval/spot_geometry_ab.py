@@ -32,7 +32,7 @@ from app.services.action_spotting import FPS, H, W, crop_centres, pitch_band  # 
 ST2 = ROOT / "data/eval/soccertrack2"
 
 
-def labelled_centres(match: str, n: int, width: int) -> np.ndarray:
+def labelled_centres(match: str, n: int, width: int, half: str = "1st", first_frame: int = 0) -> np.ndarray:
     """Training crop centre: labelled ball (status > 0) → image x via the keypoints, ffill, ±2 s."""
     from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 
@@ -40,15 +40,15 @@ def labelled_centres(match: str, n: int, width: int) -> np.ndarray:
     pitch = np.array([[float(v) for v in k.strip("()").split(",")] for k in kp])
     img = np.array(list(kp.values()), dtype=float)
     lin, near = LinearNDInterpolator(pitch, img[:, 0]), NearestNDInterpolator(pitch, img[:, 0])
-    ball = np.load(ST2 / f"ball/{match}_1st_ball.npz")
+    ball = np.load(ST2 / f"ball/{match}_{half}_ball.npz")
     ok = np.isfinite(ball["x"]) & np.isfinite(ball["y"])
     bx, by = np.where(ok, ball["x"], 0.0) + 52.5, np.where(ok, ball["y"], 0.0) + 34.0
     ix = lin(bx, by)
     ix = np.where(np.isnan(ix), near(bx, by), ix)
     cx = np.full(n, np.nan)
     for f, x, good in zip(ball["frame"], ix, (ball["status"] > 0) & ok):
-        if good and 1 <= f <= n and np.isfinite(x):
-            cx[int(f) - 1] = x
+        if good and 1 <= f - first_frame <= n and np.isfinite(x):
+            cx[int(f) - first_frame - 1] = x
     last = width / 2.0
     for i in range(n):
         cx[i] = last = last if np.isnan(cx[i]) else cx[i]
@@ -62,6 +62,9 @@ def main() -> None:
     ap.add_argument("--tracks", type=Path, required=True, help="jsonl: {class, bbox_series} per track")
     ap.add_argument("--match", required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--half", default="1st")
+    ap.add_argument("--first-frame", type=int, default=0, help="0-based source frame of the clip's frame 0")
+    ap.add_argument("--variants", default="", help="comma list; default all")
     args = ap.parse_args()
 
     import cv2
@@ -77,13 +80,15 @@ def main() -> None:
     kp = np.array(list(json.loads((ST2 / f"raw/{args.match}/{args.match}_keypoints.json").read_text()).values()))
     kp_band = (max(0, int(kp[:, 1].min()) - 60), min(fh, int(kp[:, 1].max()) + 40))
     pl_band = pitch_band(dets, fh)
-    ours, lab = crop_centres(dets, n, fps, fw), labelled_centres(args.match, n, fw)
+    ours, lab = crop_centres(dets, n, fps, fw), labelled_centres(args.match, n, fw, args.half, args.first_frame)
     variants = {
         "A_full_ours": ((0, fh), ours),
         "B_band_ours": (kp_band, ours),
         "D_band_players": (pl_band, ours),
         "C_band_labelled": (kp_band, lab),
     }
+    if args.variants:
+        variants = {k: v for k, v in variants.items() if k in args.variants.split(",")}
     args.out.mkdir(parents=True, exist_ok=True)
     meta = {k: {"band": list(b), "crop": [min(fw, round((b[1] - b[0]) * 16 / 9)), b[1] - b[0]]} for k, (b, _) in variants.items()}
     print(json.dumps(meta))

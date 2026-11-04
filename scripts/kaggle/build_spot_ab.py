@@ -29,7 +29,8 @@ subprocess.run([sys.executable, "-m", "pip", "install", "-q", "SoccerNet==0.1.62
 work = Path("/kaggle/working")
 subprocess.run(f"git clone -q https://github.com/arturxe2/T-DEED.git {work}/tdeed && git -C {work}/tdeed checkout -q __COMMIT__",
                shell=True, check=True)
-weights = str(next(Path("/kaggle/input").rglob("tdeed_soccertrack.pt")))
+ckpts = {"epoch1": str(next(Path("/kaggle/input").rglob("tdeed_soccertrack.pt"))),
+         "last": str(next(Path("/kaggle/input").rglob("tdeed_soccertrack_last.pt")))}
 videos = sorted(Path("/kaggle/input").rglob("*.mp4"))
 os.chdir(work / "tdeed"); sys.path.insert(0, str(work / "tdeed"))
 import torch
@@ -42,20 +43,22 @@ from util.eval import inference
 CONFIG = {"clip_len": 100, "feature_arch": "rny008_gsf", "temporal_arch": "ed_sgp_mixer", "n_layers": 2,
           "sgp_ks": 9, "sgp_r": 4, "num_classes": 12, "radi_displacement": 4, "modality": "rgb", "crop_dim": None,
           "dataset": "soccernetball", "batch_size": 4, "num_workers": 0, "pretrain": None}
-model = TDEEDModel(device="cuda", args=types.SimpleNamespace(**CONFIG))
-ck = torch.load(weights, map_location="cpu", weights_only=False)
-model._model.load_state_dict(ck["model"] if isinstance(ck, dict) and "model" in ck else ck)
 classes = load_classes(os.path.join("data", "soccernetball", "class.txt"))
 out_dir = work / "out"; out_dir.mkdir(exist_ok=True)
-for v in videos:
-    ds = ActionSpotInferenceDataset(str(v), clip_len=100, overlap_len=75, stride=2, dataset="soccernetball", size=(796, 448))
-    res = Path("inference_output/results_inference.json"); res.unlink(missing_ok=True)
-    inference(model, DataLoader(ds, batch_size=1, num_workers=0), classes, threshold=0.05)
-    raw = json.loads(res.read_text())["predictions"]
-    spotted = [{"ts_ms": int(round(p["frame"] * 1000 / 25)), "label": p["label"], "confidence": round(float(p["confidence"]), 3)}
-               for p in raw]
-    (out_dir / f"spotted_{v.stem}.json").write_text(json.dumps(spotted))
-    print(v.stem, len(spotted), flush=True)
+for tag, weights in ckpts.items():
+    model = TDEEDModel(device="cuda", args=types.SimpleNamespace(**CONFIG))
+    ck = torch.load(weights, map_location="cpu", weights_only=False)
+    model._model.load_state_dict(ck["model"] if isinstance(ck, dict) and "model" in ck else ck)
+    for v in videos:
+        ds = ActionSpotInferenceDataset(str(v), clip_len=100, overlap_len=75, stride=2, dataset="soccernetball", size=(796, 448))
+        res = Path("inference_output/results_inference.json"); res.unlink(missing_ok=True)
+        inference(model, DataLoader(ds, batch_size=1, num_workers=0), classes, threshold=0.05)
+        raw = json.loads(res.read_text())["predictions"]
+        spotted = [{"ts_ms": int(round(p["frame"] * 1000 / 25)), "label": p["label"], "confidence": round(float(p["confidence"]), 3)}
+                   for p in raw]
+        (out_dir / f"spotted_{tag}_{v.stem}.json").write_text(json.dumps(spotted))
+        print(tag, v.stem, len(spotted), flush=True)
+    del model; torch.cuda.empty_cache()
 with zipfile.ZipFile(work / "results.zip", "w") as zf:
     for p in out_dir.iterdir():
         zf.write(p, p.name)

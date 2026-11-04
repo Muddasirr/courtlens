@@ -1,18 +1,30 @@
 import type { CourtModel, Match, Pt, Report } from './types'
 
-const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
+export interface Share { token: string; match_id: string; created_at: string; revoked: boolean }
+export interface SharedMatch { id: string; title: string; created_at: string | null; fps: number; n_frames: number; width: number; height: number }
+
+/** Where a share token opens the read-only report. SportLens overrides this with its own route. */
+export const links = { share: (token: string) => `${window.location.origin}${window.location.pathname}#/s/${token}` }
+
+// VITE_PADEL_API_URL: set by the unified SportLens web app (gateway prefix /api/padel); standalone uses VITE_API_URL
+const BASE = ((import.meta.env.VITE_PADEL_API_URL ?? import.meta.env.VITE_API_URL) as string | undefined) ?? ''
 
 // Optional server token (PADEL_API_TOKEN): asked once on a 401, kept in this browser.
+// Inside SportLens the platform sign-in JWT ("token") is sent instead, and media URLs carry a short-lived
+// read-only media token ("padel-media-token", refreshed by the shell) so the JWT never lands in a URL.
 const TOKEN_KEY = 'padel-token'
-function token(): string {
+function read(key: string, store: () => Storage = () => localStorage): string {
   try {
-    return localStorage.getItem(TOKEN_KEY) ?? ''
+    return store().getItem(key) ?? ''
   } catch {
     return ''
   }
 }
+function token(): string {
+  return read(TOKEN_KEY) || read('token')
+}
 function withToken(url: string): string {
-  const t = token()
+  const t = read(TOKEN_KEY) || read('padel-media-token', () => sessionStorage)
   return t ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(t)}` : url
 }
 
@@ -20,7 +32,7 @@ async function req<T>(path: string, init?: RequestInit, retried = false): Promis
   const headers = new Headers(init?.headers)
   if (token()) headers.set('Authorization', `Bearer ${token()}`)
   const r = await fetch(BASE + path, { ...init, headers })
-  if (r.status === 401 && !retried) {
+  if (r.status === 401 && !retried && !read('token')) {
     const t = window.prompt('Access token for this PadelLens server')
     if (t) {
       try {
@@ -52,7 +64,10 @@ const json = (method: string, body: unknown): RequestInit => ({
 
 export const api = {
   court: () => req<CourtModel>('/api/court'),
-  matches: () => req<Match[]>('/api/matches'),
+  matches: () => {
+    const facility = read('sportlens-facility', () => sessionStorage)
+    return req<Match[]>(facility ? `/api/matches?facility_id=${encodeURIComponent(facility)}` : '/api/matches')
+  },
   match: (id: string) => req<Match>(`/api/matches/${id}`),
   remove: (id: string) => req(`/api/matches/${id}`, { method: 'DELETE' }),
   analyze: (id: string) => req<Match>(`/api/matches/${id}/analyze`, { method: 'POST' }),
@@ -62,7 +77,10 @@ export const api = {
       `/api/matches/${id}/calibration`,
       json('PUT', { points, t, snap, save_camera: saveCamera || null }),
     ),
-  cameras: () => req<{ id: string; name: string }[]>('/api/cameras'),
+  cameras: () => {
+    const facility = read('sportlens-facility', () => sessionStorage)
+    return req<{ id: string; name: string }[]>(facility ? `/api/cameras?facility_id=${encodeURIComponent(facility)}` : '/api/cameras')
+  },
   useCamera: (id: string, cameraId: string) =>
     req<Match>(`/api/matches/${id}/camera/${cameraId}`, { method: 'POST' }),
   review: (id: string, body: Record<string, Record<string, unknown>>) =>
@@ -72,6 +90,16 @@ export const api = {
   videoUrl: (id: string) => withToken(`${BASE}/api/matches/${id}/video`),
   exportUrl: (id: string, table: string) => withToken(`${BASE}/api/matches/${id}/export/${table}.csv`),
   reportUrl: (id: string) => withToken(`${BASE}/api/matches/${id}/report`),
+  share: (id: string) => req<{ share: Share | null }>(`/api/matches/${id}/share`),
+  createShare: (id: string) => req<{ share: Share }>(`/api/matches/${id}/share`, { method: 'POST' }),
+  revokeShare: (id: string) => req<{ revoked: number }>(`/api/matches/${id}/share`, { method: 'DELETE' }),
+  // public share links: no sign-in, the token in the path is the only credential
+  shared: async (token: string): Promise<{ match: SharedMatch; report: Report }> => {
+    const r = await fetch(`${BASE}/api/public/share/${encodeURIComponent(token)}`)
+    if (!r.ok) throw new Error(r.status === 404 ? 'This link has been turned off or does not exist.' : `${r.status} ${r.statusText}`)
+    return r.json()
+  },
+  sharedVideoUrl: (token: string) => `${BASE}/api/public/share/${encodeURIComponent(token)}/video`,
 
   upload(file: File, title: string, onProgress: (p: number) => void): Promise<Match> {
     return new Promise((resolve, reject) => {
@@ -79,6 +107,8 @@ export const api = {
       const fd = new FormData()
       fd.append('file', file)
       fd.append('title', title)
+      const facility = read('sportlens-facility', () => sessionStorage)
+      if (facility) fd.append('facility_id', facility)
       xhr.open('POST', `${BASE}/api/matches`)
       if (token()) xhr.setRequestHeader('Authorization', `Bearer ${token()}`)
       xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total)

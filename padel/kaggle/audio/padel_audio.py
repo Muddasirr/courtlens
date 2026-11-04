@@ -32,6 +32,22 @@ REPO = Path("/tmp/padel")
 FPS = 25.0
 TOL_FRAMES = {"200ms": 5, "280ms": 7}
 COLLARS = (0.25, 0.1)
+# Club cameras often record low-bandwidth audio (PlaySight at Legends Arena: AAC 8 kHz mono, nothing above
+# 4 kHz). The broadcast-trained CRNN found 0 hits there. Train on band-limited copies too, and report
+# held-out accuracy at 8 kHz as well as full band.
+LOWBAND = (16000, 11025, 8000)
+BAND_P = (0.4, 0.2, 0.2, 0.2)  # full, 16 k, 11 k, 8 k
+
+
+def band_limit(y: np.ndarray, sr_from: int, sr_low: int) -> np.ndarray:
+    """Down to sr_low and back: what a low-sample-rate recorder keeps of the signal."""
+    from math import gcd
+
+    from scipy.signal import resample_poly
+
+    g = gcd(sr_from, sr_low)
+    lo = resample_poly(y, sr_low // g, sr_from // g)
+    return resample_poly(lo, sr_from // g, sr_low // g)[: len(y)].astype(np.float32)
 
 
 def first(p: str) -> Path | None:
@@ -112,21 +128,26 @@ def stage_audio(dec: Path, hits: dict, fold_sets: list[set[str]]) -> dict:
     from padel_analyzer.engine import audio as A
 
     names = sorted(hits)
-    feats, targets = {}, {}
+    bands = (0,) + LOWBAND  # 0 = full band
+    feats: dict[int, dict[str, np.ndarray]] = {b: {} for b in bands}
+    targets = {}
     for n in names:
         y = A.load_audio(dec / "rallies" / n)
-        m = A.logmel(y)
+        for b in bands:
+            m = A.logmel(y if b == 0 else band_limit(y, A.SR, b))
+            feats[b][n] = m[: len(feats[0][n])] if b else m
+        m = feats[0][n]
         t = A.frame_times(len(m))
         tgt = np.zeros(len(m), np.float32)
-        for a, b in hits[n]:
-            tgt[(t >= a - 0.02) & (t <= b + 0.02)] = 1
-        feats[n], targets[n] = m, tgt
-    log("audio features", len(feats), "rallies")
+        for a, b_ in hits[n]:
+            tgt[(t >= a - 0.02) & (t <= b_ + 0.02)] = 1
+        targets[n] = tgt
+    log("audio features", len(targets), "rallies x", len(bands), "bands")
 
     def train(train_names: list[str], epochs: int = 120, seed: int = 0):
         torch.manual_seed(seed)
         rng = np.random.default_rng(seed)
-        allf = np.concatenate([feats[n] for n in train_names])
+        allf = np.concatenate([feats[0][n] for n in train_names])
         mean, std = allf.mean(0), allf.std(0) + 1e-6
         model = A.build_model().cuda()
         opt = torch.optim.Adam(model.parameters(), 1e-3)
@@ -134,9 +155,10 @@ def stage_audio(dec: Path, hits: dict, fold_sets: list[set[str]]) -> dict:
         for ep in range(epochs):
             model.train()
             xs, ys = [], []
-            for n in train_names:  # random crops, ~4 per rally per epoch
-                f, g = (feats[n] - mean) / std, targets[n]
-                for _ in range(max(1, len(f) // L * 2)):
+            for n in train_names:  # random crops, ~4 per rally per epoch, each from a random bandwidth
+                g = targets[n]
+                for _ in range(max(1, len(g) // L * 2)):
+                    f = (feats[bands[rng.choice(len(bands), p=BAND_P)]][n] - mean) / std
                     s = rng.integers(0, max(1, len(f) - L))
                     x, t = f[s:s + L], g[s:s + L]
                     if len(x) < L:
@@ -156,24 +178,27 @@ def stage_audio(dec: Path, hits: dict, fold_sets: list[set[str]]) -> dict:
                 opt.step()
         return model.eval(), mean, std
 
-    def predict(model, mean, std, n):
-        f = (feats[n] - mean) / std
+    def predict(model, mean, std, n, band=0):
+        f = (feats[band][n] - mean) / std
         with torch.no_grad():
             p = torch.sigmoid(model(torch.from_numpy(f)[None].float().cuda())).cpu().numpy()[0]
         return A.frame_times(len(f)), p
 
-    def best_thr(probs: dict, names_: list[str]) -> float:
+    def best_thr(probs: dict, names_: list[str], probs8: dict | None = None) -> float:
+        """One threshold for full-band and 8 kHz audio together (the recorder is not known in advance)."""
         best = (0.0, 0.5)
         for thr in np.arange(0.2, 0.9, 0.05):
             tp = npred = ngt = 0
-            for n in names_:
-                t, p = probs[n]
-                a, b, c = event_f1(list(A.peaks(t, p, thr)), [h[0] for h in hits[n]], 0.25)
-                tp, npred, ngt = tp + a, npred + b, ngt + c
+            for pr in (probs, probs8) if probs8 else (probs,):
+                for n in names_:
+                    t, p = pr[n]
+                    a, b, c = event_f1(list(A.peaks(t, p, thr)), [h[0] for h in hits[n]], 0.25)
+                    tp, npred, ngt = tp + a, npred + b, ngt + c
             best = max(best, (prf(tp, npred, ngt)["f1"], float(thr)))
         return best[1]
 
     oof: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    oof8: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     fold_thr: dict[str, float] = {}
     res = {"folds": [sorted(f) for f in fold_sets], "per_fold": []}
     for k, test_t in enumerate(fold_sets):
@@ -181,38 +206,45 @@ def stage_audio(dec: Path, hits: dict, fold_sets: list[set[str]]) -> dict:
         te = [n for n in names if tournament(n) in test_t]
         model, mean, std = train(tr)
         tr_probs = {n: predict(model, mean, std, n) for n in tr}
-        thr = best_thr(tr_probs, tr)
+        tr_probs8 = {n: predict(model, mean, std, n, 8000) for n in tr}
+        thr = best_thr(tr_probs, tr, tr_probs8)
         fr = {"test_tournaments": sorted(test_t), "threshold": thr}
-        for collar in COLLARS:
-            tp = npred = ngt = 0
-            for n in te:
-                t, p = predict(model, mean, std, n)
-                oof[n] = (t, p)
-                fold_thr[n] = thr
-                a, b, c = event_f1(list(A.peaks(t, p, thr)), [h[0] for h in hits[n]], collar)
-                tp, npred, ngt = tp + a, npred + b, ngt + c
-            fr[f"collar_{int(collar * 1000)}ms"] = prf(tp, npred, ngt)
+        for n in te:
+            oof[n] = predict(model, mean, std, n)
+            oof8[n] = predict(model, mean, std, n, 8000)
+            fold_thr[n] = thr
+        for tag, src in (("", oof), ("8khz_", oof8)):
+            for collar in COLLARS:
+                tp = npred = ngt = 0
+                for n in te:
+                    t, p = src[n]
+                    a, b, c = event_f1(list(A.peaks(t, p, thr)), [h[0] for h in hits[n]], collar)
+                    tp, npred, ngt = tp + a, npred + b, ngt + c
+                fr[f"{tag}collar_{int(collar * 1000)}ms"] = prf(tp, npred, ngt)
         res["per_fold"].append(fr)
         log("audio fold", k, json.dumps(fr)[:300])
-    for collar in COLLARS:
-        tp = npred = ngt = 0
-        for n in names:
-            t, p = oof[n]
-            a, b, c = event_f1(list(A.peaks(t, p, fold_thr[n])), [h[0] for h in hits[n]], collar)
-            tp, npred, ngt = tp + a, npred + b, ngt + c
-        res[f"overall_collar_{int(collar * 1000)}ms"] = prf(tp, npred, ngt)
+    for tag, src in (("", oof), ("8khz_", oof8)):
+        for collar in COLLARS:
+            tp = npred = ngt = 0
+            for n in names:
+                t, p = src[n]
+                a, b, c = event_f1(list(A.peaks(t, p, fold_thr[n])), [h[0] for h in hits[n]], collar)
+                tp, npred, ngt = tp + a, npred + b, ngt + c
+            res[f"{tag}overall_collar_{int(collar * 1000)}ms"] = prf(tp, npred, ngt)
     # final model on every rally
     model, mean, std = train(names)
     all_probs = {n: predict(model, mean, std, n) for n in names}
-    thr = best_thr(all_probs, names)
+    thr = best_thr(all_probs, names, {n: predict(model, mean, std, n, 8000) for n in names})
     (OUT / "models").mkdir(parents=True, exist_ok=True)
     torch.save({"state_dict": model.cpu().state_dict(), "mean": mean, "std": std, "threshold": thr,
                 "sr": A.SR, "n_fft": A.N_FFT, "hop": A.HOP, "n_mels": A.N_MELS,
-                "trained_on": "Decorte et al. CVPRW 2024 padel rallies (99 rallies, 11 tournaments)"},
+                "trained_on": "Decorte et al. CVPRW 2024 padel rallies (99 rallies, 11 tournaments), "
+                              "full band + 16/11/8 kHz band-limited copies"},
                OUT / "models" / "audio_hit.pt")
     res["final_threshold"] = thr
     np.savez_compressed(OUT / "audio_oof.npz", **{f"t__{n}": oof[n][0] for n in names},
-                        **{f"p__{n}": oof[n][1] for n in names}, **{f"thr__{n}": fold_thr[n] for n in names})
+                        **{f"p__{n}": oof[n][1] for n in names}, **{f"thr__{n}": fold_thr[n] for n in names},
+                        **{f"p8__{n}": oof8[n][1] for n in names})
     return res, oof, fold_thr
 
 

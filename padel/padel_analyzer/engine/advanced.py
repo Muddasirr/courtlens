@@ -206,7 +206,7 @@ def outcome_stats(rep: dict, golden_point: bool = False) -> None:
         t["stats"]["net_finishes"] = {"won": sum(r["winner_team"] == tid for r in net),
                                       "lost": sum(r["winner_team"] != tid for r in net)}
     # replay padel scoring over the decided points (assumes the recording starts at 0-0). Only confirmed
-    # winners: the model is right on ~72 % of points (EVAL §9), too few for a reliable game score.
+    # winners: the model is right on ~69 % of points (EVAL §12), too few for a reliable game score.
     decided = [r for r in decided if r.get("winner_source", "confirmed") == "confirmed"]
     log, sets, won_games = [], [], [0, 0]
     pts: list = []

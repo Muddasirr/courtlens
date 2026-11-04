@@ -9,6 +9,7 @@ import hmac
 import io
 import json
 import re
+import secrets
 import shutil
 from pathlib import Path
 
@@ -18,12 +19,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from ..engine import advanced as ADV
 from ..engine import court as C
 from ..engine.shots import CLASSES
-from . import db, worker
-from .settings import API_TOKEN, CORS, MATCH_DIR, WEB_DIST
+from . import db, platform_auth, worker
+from .settings import API_TOKEN, AUTH_URL, CORS, MATCH_DIR, WEB_DIST
 
 app = FastAPI(title="PadelLens", version="1.0")
 app.add_middleware(CORSMiddleware, allow_origins=CORS, allow_methods=["*"], allow_headers=["*"])
@@ -31,20 +33,43 @@ app.add_middleware(CORSMiddleware, allow_origins=CORS, allow_methods=["*"], allo
 
 @app.middleware("http")
 async def require_token(request: Request, call_next):
+    """PADEL_API_TOKEN = unrestricted service token; with PADEL_AUTH_URL the platform JWT (header) or a media
+    token (?token=, GET only) is accepted and scoped to the caller's facilities."""
     path = request.url.path
-    if API_TOKEN and path.startswith("/api/") and path != "/api/health":
-        auth = request.headers.get("authorization", "")
-        given = auth[7:] if auth.lower().startswith("bearer ") else request.query_params.get("token", "")
-        if not hmac.compare_digest(given.encode(), API_TOKEN.encode()):
-            return JSONResponse({"detail": "unauthorized"}, status_code=401)
-    return await call_next(request)
+    # /api/public/*: share links, read-only and scoped by their own unguessable token
+    if (not (API_TOKEN or AUTH_URL) or not path.startswith("/api/") or path == "/api/health"
+            or path.startswith("/api/public/")):
+        return await call_next(request)
+    auth = request.headers.get("authorization", "")
+    given = auth[7:] if auth.lower().startswith("bearer ") else request.query_params.get("token", "")
+    unauthorized = JSONResponse({"detail": "unauthorized"}, status_code=401)
+    if not given:
+        return unauthorized
+    if API_TOKEN and hmac.compare_digest(given.encode(), API_TOKEN.encode()):
+        scope = None
+    elif AUTH_URL and given.startswith(platform_auth.MEDIA_PREFIX):
+        ok, scope = platform_auth.verify_media(given)
+        # read-only, and it cannot mint its successor (that needs a real sign-in)
+        if not ok or request.method not in ("GET", "HEAD") or path == "/api/media-token":
+            return unauthorized
+    elif AUTH_URL:
+        scope = await run_in_threadpool(platform_auth.facilities, given)
+        if scope is None:
+            return unauthorized
+    else:
+        return unauthorized
+    reset = platform_auth.ALLOWED.set(scope)
+    try:
+        return await call_next(request)
+    finally:
+        platform_auth.ALLOWED.reset(reset)
 db.init()
 worker.recover_interrupted()
 
 
 def _match(s, match_id: str) -> db.Match:
     m = s.get(db.Match, match_id)
-    if not m:
+    if not m or not platform_auth.can_see(m.facility_id):  # other tenants' matches look absent
         raise HTTPException(404, "match not found")
     return m
 
@@ -58,6 +83,12 @@ def health() -> dict:
     return {"ok": True}
 
 
+@app.get("/api/media-token")
+def media_token() -> dict:
+    """Short-lived read-only token for <video>/<img>/download URLs (they cannot send an Authorization header)."""
+    return platform_auth.media_token(platform_auth.allowed())
+
+
 @app.get("/api/court")
 def court_model() -> dict:
     """Court geometry for the UI (landmarks, lines, zones)."""
@@ -66,10 +97,11 @@ def court_model() -> dict:
 
 
 @app.post("/api/matches")
-def create_match(file: UploadFile = File(...), title: str = Form("")) -> dict:
+def create_match(file: UploadFile = File(...), title: str = Form(""), facility_id: str = Form("")) -> dict:
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(file.filename or "match.mp4").name) or "match.mp4"
+    facility = _facility(facility_id)
     with db.Session() as s:
-        m = db.Match(title=title or Path(name).stem, filename=name)
+        m = db.Match(title=title or Path(name).stem, filename=name, facility_id=facility)
         s.add(m)
         s.commit()
         folder = MATCH_DIR / m.id
@@ -90,10 +122,27 @@ def create_match(file: UploadFile = File(...), title: str = Form("")) -> dict:
         return m.to_dict()
 
 
+def _facility(requested: str) -> str | None:
+    try:
+        return platform_auth.pick_facility(requested)
+    except PermissionError as exc:
+        raise HTTPException(403, f"not a member of facility {exc}") from exc
+
+
+def _scoped(q, model, facility_id: str | None):
+    scope = platform_auth.allowed()
+    if scope is not None:
+        q = q.filter(model.facility_id.in_(scope))
+    if facility_id:
+        q = q.filter(model.facility_id == facility_id)
+    return q
+
+
 @app.get("/api/matches")
-def list_matches() -> list[dict]:
+def list_matches(facility_id: str | None = None) -> list[dict]:
     with db.Session() as s:
-        return [m.to_dict() for m in s.query(db.Match).order_by(db.Match.created_at.desc()).all()]
+        q = _scoped(s.query(db.Match), db.Match, facility_id)
+        return [m.to_dict() for m in q.order_by(db.Match.created_at.desc()).all()]
 
 
 @app.get("/api/matches/{match_id}")
@@ -108,6 +157,7 @@ def delete_match(match_id: str) -> dict:
         m = _match(s, match_id)
         if m.status in ("queued", "processing"):
             raise HTTPException(409, "match is being analysed")
+        s.query(db.Share).filter(db.Share.match_id == match_id).delete()
         s.delete(m)
         s.commit()
     shutil.rmtree(MATCH_DIR / match_id, ignore_errors=True)
@@ -165,7 +215,7 @@ def set_calibration(match_id: str, body: CalibrationIn) -> dict:
         if m.status in ("uploaded", "calibrated", "failed", "done"):
             m.status = "calibrated" if m.status != "done" else "done"
         if body.save_camera:
-            cam = db.Camera(name=body.save_camera, calibration=m.calibration)
+            cam = db.Camera(name=body.save_camera, calibration=m.calibration, facility_id=m.facility_id)
             s.add(cam)
             s.flush()
             m.camera_id = cam.id
@@ -176,9 +226,10 @@ def set_calibration(match_id: str, body: CalibrationIn) -> dict:
 
 
 @app.get("/api/cameras")
-def cameras() -> list[dict]:
+def cameras(facility_id: str | None = None) -> list[dict]:
     with db.Session() as s:
-        return [{"id": c.id, "name": c.name, "calibration": c.calibration} for c in s.query(db.Camera).all()]
+        return [{"id": c.id, "name": c.name, "calibration": c.calibration}
+                for c in _scoped(s.query(db.Camera), db.Camera, facility_id).all()]
 
 
 @app.post("/api/matches/{match_id}/camera/{camera_id}")
@@ -186,7 +237,7 @@ def use_camera(match_id: str, camera_id: str) -> dict:
     with db.Session() as s:
         m = _match(s, match_id)
         cam = s.get(db.Camera, camera_id)
-        if not cam:
+        if not cam or not platform_auth.can_see(cam.facility_id):
             raise HTTPException(404, "camera not found")
         if tuple(cam.calibration["image_size"]) != (m.width, m.height):
             raise HTTPException(422, "camera calibration was made at a different resolution")
@@ -271,6 +322,15 @@ def report(match_id: str) -> dict:
     return merge_review(json.loads(path.read_text()), review)
 
 
+@app.get("/api/matches/{match_id}/summary")
+def summary(match_id: str) -> dict:
+    """Report without the heavy parts (replay track, shots, heatmaps): for dashboards and cross-match tables."""
+    rep = _report(match_id)
+    return {"match": rep["match"], "quality": rep.get("quality", {}),
+            "players": [{k: v for k, v in p.items() if k != "heatmap"} for p in rep["players"]],
+            "teams": rep["teams"], "rallies": len(rep["rallies"])}
+
+
 class ReviewIn(BaseModel):
     players: dict[str, dict] | None = None  # {"0": {"name": "Ari"}}
     teams: dict[str, dict] | None = None  # {"0": {"name": "Ari / Paula"}}
@@ -335,5 +395,79 @@ def merge_review(rep: dict, review: dict) -> dict:
     return rep
 
 
+
+# --- public share links ---------------------------------------------------------------------------------
+# A share token is a capability for one match's report and video: no sign-in, GET only, revocable.
+# 32 random bytes (urlsafe); one active link per match (making a new one revokes the old).
+
+def _active_share(s, match_id: str) -> db.Share | None:
+    return (s.query(db.Share).filter(db.Share.match_id == match_id, db.Share.revoked_at.is_(None))
+            .order_by(db.Share.created_at.desc()).first())
+
+
+@app.get("/api/matches/{match_id}/share")
+def get_share(match_id: str) -> dict:
+    with db.Session() as s:
+        _match(s, match_id)
+        sh = _active_share(s, match_id)
+        return {"share": sh.to_dict() if sh else None}
+
+
+@app.post("/api/matches/{match_id}/share")
+def create_share(match_id: str) -> dict:
+    with db.Session() as s:
+        m = _match(s, match_id)
+        if not (MATCH_DIR / m.id / "report.json").exists():
+            raise HTTPException(409, "the match has no report yet: share it once analysis is done")
+        now = db._now()
+        for old in s.query(db.Share).filter(db.Share.match_id == match_id, db.Share.revoked_at.is_(None)):
+            old.revoked_at = now
+        sh = db.Share(token=secrets.token_urlsafe(32), match_id=match_id)
+        s.add(sh)
+        s.commit()
+        return {"share": sh.to_dict()}
+
+
+@app.delete("/api/matches/{match_id}/share")
+def revoke_share(match_id: str) -> dict:
+    with db.Session() as s:
+        _match(s, match_id)
+        now = db._now()
+        n = 0
+        for sh in s.query(db.Share).filter(db.Share.match_id == match_id, db.Share.revoked_at.is_(None)):
+            sh.revoked_at = now
+            n += 1
+        s.commit()
+        return {"revoked": n}
+
+
+def _shared_match(s, token: str) -> db.Match:
+    sh = s.get(db.Share, token) if token and len(token) <= 64 else None
+    m = s.get(db.Match, sh.match_id) if sh and sh.revoked_at is None else None
+    if m is None or not (MATCH_DIR / m.id / "report.json").exists():
+        raise HTTPException(404, "this link is not valid any more")  # revoked, deleted and unknown look the same
+    return m
+
+
+@app.get("/api/public/share/{token}")
+def public_report(token: str) -> JSONResponse:
+    with db.Session() as s:
+        m = _shared_match(s, token)
+        review = m.review or {}
+        meta = {"id": m.id, "title": m.title, "created_at": m.created_at.isoformat() if m.created_at else None,
+                "fps": m.fps, "n_frames": m.n_frames, "width": m.width, "height": m.height, "status": m.status}
+    rep = merge_review(json.loads((MATCH_DIR / m.id / "report.json").read_text()), review)
+    return JSONResponse({"match": meta, "report": rep},
+                        headers={"Cache-Control": "private, no-store", "X-Robots-Tag": "noindex"})
+
+
+@app.get("/api/public/share/{token}/video")
+def public_video(token: str) -> FileResponse:
+    with db.Session() as s:
+        m = _shared_match(s, token)
+    return FileResponse(_video(m), media_type="video/mp4", headers={"X-Robots-Tag": "noindex"})
+
+
 if WEB_DIST.exists():
     app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
+

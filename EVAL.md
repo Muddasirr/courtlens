@@ -221,6 +221,45 @@ stage time); round trip 4186 s.
 
 Thresholds unchanged (0.2 pass / 0.3 dribble, chosen before this test) — M7 stays a clean test.
 
+Second window, same match: 2nd half 24:00–36:00 (`testing_videos/st2_128057_2nd_1440_2160.mp4`),
+live app with both fixes, chosen for its goals. Pass **F1 0.66** (P 0.59 / R 0.75), dribble
+**0.60**, any on-ball action **0.70**. **Shots 0/5 and goals 0/3**: the spotter emitted 2 SHOT
+spots in 12 min and read the real shots as PASS / DRIVE. Throw-ins 0/3, free kicks 0/6.
+Score with `--clip-start-s 1439.04 --clip-end-s 2159.04`: the source's first video frame is
+at 1.000 s and the container starts at ≈0.01 s, so `-ss 1440` lands ≈1 s early on the label clock.
+
+Are shots a crop problem? No. Spotter on this window, by input (pass F1 @0.2 / dribble F1 @0.3 /
+SHOT or GOAL spots within ±2 s of the 5 labelled): our ball 0.70 / 0.60 / 1; players' band 0.67 /
+0.57 / 1; **labelled ball 0.74 / 0.68 / 2**, those at confidence 0.06 and 0.20. None reaches the
+0.3 threshold, and the model never spots GOAL here. Likely cause, not yet tested: shots and goals are rare in training
+(≈1 % of events). Either way a better crop will not fix it: it needs retraining or a separate signal.
+
+Other classes on the players' band, both M7 windows: throw-ins at 0.3: 4 right of 7 predicted,
+11 labelled (±1.5 s; now mapped to `kick_in` for football, not yet run in the live app). Free
+kicks: 0 spots at any confidence (9 labelled). Out, block, tackle: too few confident spots.
+
+Wrong checkpoint in the app (found 2026-10-31): `tdeed_soccertrack.pt` is `best.pt`, the lowest
+validation loss, which is epoch 1 of 12. The shot figures in `action_spotting.py`'s docstring are
+from `last.pt`. Both on the labelled-ball crop, ±1 s, 12 min clips (`spot_train/`, `build_spot_ab.py`):
+
+| | Epoch 1 (app): train M3+M5 / held-out M7 | Last: train M3+M5 / held-out M7 |
+|---|---|---|
+| Pass F1 @0.2 | 0.80 / 0.74 | 0.75 / 0.69 |
+| Pass F1 @0.4 | 0.71 / 0.73 | **0.84 / 0.80** |
+| Dribble F1 @0.4 | 0.70 / 0.73 | 0.75 / 0.73 |
+| Shot + goal @0.3 (labelled 17 / 5) | 0 / 0 found | **10 / 3 found** (F1 0.59 / 0.60) |
+| Throw-in @0.3 (8 / 3) | 8 / 3 | 7 / 3 |
+
+Training-match scores are about the same as held-out, so overfitting is not the limit. Clips were
+picked for shots; the samples are small; 0.4 was read off this table, so M7 is no longer clean for
+it. With our own ball on the players' band the last checkpoint finds 1 of 5 shots at 0.3.
+
+Caveat on the crop numbers above: 118576, 118578, 128058 and M7 have that 1 s video start, which
+`extract_half.py`'s resume seek ignored until now. Crops cut after a dropped connection are ≈1 s
+before their event, including most of the 423 M7 test crops. Old/new compare on the same crops,
+so the ranking holds, but the absolute "found" shares are understated and were not re-measured.
+Train labels are detector boxes, so they stay on real balls. The live-app coverage is unaffected.
+
 ## Football broadcast through the live app (DFL Bundesliga, 12 min, 2026-10-27)
 
 12 min of 1080p wide tactical feed (Bayern home, `A1606b0e6_0` chunks 21–44 stitched →

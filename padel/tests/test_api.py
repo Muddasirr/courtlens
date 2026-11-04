@@ -75,6 +75,8 @@ def test_end_to_end(client, tmp_path, calib):
     assert r.status_code == 200
     rep = c.get(f"/api/matches/{m['id']}/report").json()
     assert rep["players"][0]["name"] == "Ari"
+    summ = c.get(f"/api/matches/{m['id']}/summary").json()  # review merged, heavy parts dropped
+    assert summ["players"][0]["name"] == "Ari" and "heatmap" not in summ["players"][0] and "replay" not in summ
     if rep["rallies"]:
         assert rep["teams"][1]["stats"]["rallies_won"] == 1
 

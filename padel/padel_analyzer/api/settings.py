@@ -17,6 +17,17 @@ WEB_DIST = ROOT / "web" / "dist"
 # optional shared secret: when set, every /api request needs "Authorization: Bearer <token>" (or ?token= for
 # <video>/<img> URLs, which cannot send headers); /api/health stays open for load balancers
 API_TOKEN = os.environ.get("PADEL_API_TOKEN", "")
+# SportLens platform sign-in: core API base URL (e.g. http://core-api:8000). When set, the core JWT is accepted
+# (Bearer or ?token=) and matches are scoped to the caller's facilities; PADEL_API_TOKEN stays a service token
+AUTH_URL = os.environ.get("PADEL_AUTH_URL", "").rstrip("/")
+AUTH_CACHE_S = int(os.environ.get("PADEL_AUTH_CACHE_S", "60"))
+# <video>/<img>/download URLs cannot send headers: they carry a short-lived, read-only media token signed with
+# this secret instead of the sign-in JWT. Set it when running more than one replica (random per process otherwise)
+MEDIA_SECRET = os.environ.get("PADEL_MEDIA_SECRET", "")
+MEDIA_TOKEN_TTL_S = int(os.environ.get("PADEL_MEDIA_TOKEN_TTL_S", str(6 * 3600)))
+# matches created before platform sign-in have no facility; set this to file them under one facility at startup,
+# otherwise they stay visible only through PADEL_API_TOKEN
+LEGACY_FACILITY = os.environ.get("PADEL_LEGACY_FACILITY", "")
 KAGGLE_JOB_TIMEOUT_S = int(os.environ.get("PADEL_KAGGLE_TIMEOUT_S", str(9 * 3600)))  # Kaggle kernels stop at 12 h
 
 MATCH_DIR.mkdir(parents=True, exist_ok=True)

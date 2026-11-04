@@ -1,4 +1,5 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// VITE_FUTSAL_API_URL: set by the unified SportLens web app (same-origin gateway, may be ""); standalone uses VITE_API_URL
+const API_URL = import.meta.env.VITE_FUTSAL_API_URL ?? (import.meta.env.VITE_API_URL || "http://localhost:8000");
 
 export type Facility = { id: string; name: string; timezone: string; created_at: string };
 export type FacilityRole = "owner" | "staff" | "reviewer";

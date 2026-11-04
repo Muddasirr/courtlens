@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("worker")
 
 _running = True
-ORPHAN_MAX_AGE = timedelta(hours=12)  # a Kaggle run is capped at 6 h; older ⇒ abandoned
+ORPHAN_MAX_AGE = timedelta(hours=24)  # a host that sleeps overnight must still collect its finished run
 
 
 def _stop(*_: object) -> None:

@@ -11,6 +11,7 @@ import numpy as np
 from . import ball as B
 from . import court as C
 from . import players as P
+from . import hitter as HT
 from . import rallies as R
 from . import stats as ST
 from .detect import Detections, Detector
@@ -154,12 +155,16 @@ def analyze(det: Detections, calib: C.Calibration, video: str | Path | None = No
         hit_model = HitModel(video_only) if aud is None and video_only.exists() else HitModel()
     hits, hit_score = hit_model.detect(bt_ev, slot_tracks, audio=aud)
     # broadcast replays / close-ups: a hit can only be measured while the main court view is on screen
-    # (≥ 3 players tracked around it); fixed facility cameras are never affected
-    seen = (~np.isnan(slot_tracks.raw_m[:, :, 0])).sum(1) >= 3
-    k = max(1, int(round(fps)))
-    court_view = np.convolve(seen.astype(float), np.ones(2 * k + 1) / (2 * k + 1), "same") >= 0.6
-    hits = [h for h in hits if court_view[min(h.frame, det.n - 1)]]
-    strokes = (shot_model or ShotModel()).predict(hits, bt_ev, slot_tracks, fps, video, det.step)
+    # (≥ 3 players tracked around it). Only for videos that cut away: a fixed club camera never leaves the
+    # court, but its near pair often stands below the frame, and this rule then dropped real hits in 57 % of a
+    # Legends Arena session (docs/EVAL.md §13).
+    if det.cuts.any():
+        seen = (~np.isnan(slot_tracks.raw_m[:, :, 0])).sum(1) >= 3
+        k = max(1, int(round(fps)))
+        court_view = np.convolve(seen.astype(float), np.ones(2 * k + 1) / (2 * k + 1), "same") >= 0.6
+        hits = [h for h in hits if court_view[min(h.frame, det.n - 1)]]
+    shot_model = shot_model or ShotModel()
+    strokes = shot_model.predict(hits, bt_ev, slot_tracks, fps, video, det.step)
     prog("rallies", 0)
     rallies = R.group(hits, fps, det.n, slot_tracks.segments, [s.kind == "serve" for s in strokes])
     person_of = [int(slot_tracks.person[h.frame, h.slot]) for h in hits]
@@ -169,7 +174,19 @@ def analyze(det: Detections, calib: C.Calibration, video: str | Path | None = No
     if len(live) < len(hits):
         hits, strokes = [hits[i] for i in live], [strokes[i] for i in live]
         person_of, team_of = [person_of[i] for i in live], [team_of[i] for i in live]
-        rallies = R.group(hits, fps, det.n, slot_tracks.segments, [s.kind == "serve" for s in strokes])
+    # the two ends alternate: fix the hitters over each rally (after the dead-ball rule, which needs the raw
+    # per-hit evidence: the alternation would hide one pair's touches), then redo the strokes that changed
+    slots = HT.assign([h.frame for h in hits], slot_tracks, bt_ev.xy, fps)
+    changed = [i for i, (h, sl) in enumerate(zip(hits, slots)) if h.slot != sl]
+    for h, sl in zip(hits, slots):
+        h.slot = sl
+    if changed:
+        redo = shot_model.predict([hits[i] for i in changed], bt_ev, slot_tracks, fps, video, det.step)
+        for i, st in zip(changed, redo):
+            strokes[i] = st
+    person_of = [int(slot_tracks.person[h.frame, h.slot]) for h in hits]
+    team_of = [0 if p < 2 else 1 for p in person_of]
+    rallies = R.group(hits, fps, det.n, slot_tracks.segments, [s.kind == "serve" for s in strokes])
     rally_of = [0] * len(hits)
     for r in rallies:
         for i in r.hits:
@@ -264,6 +281,7 @@ def analyze(det: Detections, calib: C.Calibration, video: str | Path | None = No
         "audio_used": aud is not None,
         "audio_hits": n_audio_hits,
         "calibration_reproj_m": calib.reproj_m,
+        "view_limit_y": (round(C.view_limit_y(calib), 2) if C.view_limit_y(calib) is not None else None),
         "analysis_s": round(time.time() - t0, 1),
     }
     step = max(1, int(round(fps / REPLAY_HZ)))

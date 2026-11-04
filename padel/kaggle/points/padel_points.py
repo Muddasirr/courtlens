@@ -1,11 +1,9 @@
-"""Kernel: point labels from broadcast scoreboards -> (1) pair identity across ends, (2) point-winner model.
+"""Kernel: point labels from broadcast scoreboards -> point-winner model.
 
 Inputs: PT100 videos + held-out detection caches (both finals), padel-scoreboard states, the Kuwait 2025 clip's
 detections / report / hand-read points (padel-kuwait-small), production models.
-  1. identity: orientation (which pair plays the far end) per segment, old vs new linking, against the truth
-     from the scoreboard serve dot + where the serve was hit.
-  2. points: one row per scoreboard point change -> engine.points features, label = last hitter's pair won.
-     Leave-one-match-out over F / M / Kuwait; production model trained on all three.
+One row per scoreboard point change -> engine.points features, label = last hitter's pair won.
+Leave-one-match-out over F / M / Kuwait; production model trained on all three.
 Output: /kaggle/working/out/points.json, models/point_lgbm.{txt,json}
 """
 from __future__ import annotations
@@ -20,7 +18,6 @@ import time
 import traceback
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 OUT = Path("/kaggle/working/out")
@@ -65,55 +62,6 @@ def setup():
     log("models", sorted(p.name for p in models.iterdir()))
 
 
-def old_link_identity(segments, det_of, hists, n):
-    """team[f, slot], person[f, slot]. Segment 0: far pair = team 0, slots 0..3 = persons 0..3.
-    Later segments: the side whose kit matches team 0's kit is team 0; partners by individual colour."""
-    team = np.zeros((n, 4), int)
-    person = np.tile(np.arange(4), (n, 1))
-    team[:, 2:] = 1
-    if not hists or len(segments) < 2:
-        return team, person
-    def slot_hist(a, b, s):
-        hs = [hists[(f, det_of[f, s])] for f in range(a, b) if det_of[f, s] >= 0 and (f, det_of[f, s]) in hists]
-        return np.mean(hs, 0) if hs else None
-    proto_person: dict[int, np.ndarray] = {}
-    a, b = segments[0]
-    for s in range(4):
-        h = slot_hist(a, b, s)
-        if h is not None:
-            proto_person[s] = h
-    for a, b in segments[1:]:
-        hs = [slot_hist(a, b, s) for s in range(4)]
-        if len(proto_person) < 4 or any(h is None for h in hs):
-            team[a:b] = team[a - 1]
-            person[a:b] = person[a - 1]
-            continue
-        P = np.array([proto_person[p] for p in range(4)])
-        Hs = np.array(hs)
-        cost = np.array([[cv2.compareHist(Hs[s].astype(np.float32), P[p].astype(np.float32),
-                                          cv2.HISTCMP_BHATTACHARYYA) for p in range(4)] for s in range(4)])
-        # pair-level decision first: far side = team 0 or team 1
-        keep = cost[0, 0] + cost[0, 1] + cost[1, 0] + cost[1, 1] + cost[2, 2] + cost[2, 3] + cost[3, 2] + cost[3, 3]
-        swap = cost[0, 2] + cost[0, 3] + cost[1, 2] + cost[1, 3] + cost[2, 0] + cost[2, 1] + cost[3, 0] + cost[3, 1]
-        far_team = 0 if keep <= swap else 1
-        far_people = [0, 1] if far_team == 0 else [2, 3]
-        near_people = [2, 3] if far_team == 0 else [0, 1]
-        for slots, people in (((0, 1), far_people), ((2, 3), near_people)):
-            c = cost[np.ix_(slots, people)]
-            straight = c[0, 0] + c[1, 1] <= c[0, 1] + c[1, 0]
-            assigned = people if straight else people[::-1]
-            for s, p in zip(slots, assigned):
-                person[a:b, s] = p
-                team[a:b, s] = 0 if p < 2 else 1
-    return team, person
-
-
-
-def orientation(tracks, segments) -> list[int]:
-    """Per segment: the identity (0 / 1) of the pair on the far side."""
-    return [int(tracks.team[a, 0]) for a, b in segments]
-
-
 def main() -> None:
     setup()
     import lightgbm as lgb
@@ -122,6 +70,7 @@ def main() -> None:
 
     from padel_analyzer.engine import ball as B
     from padel_analyzer.engine import court as C
+    from padel_analyzer.engine import hitter as HT
     from padel_analyzer.engine import pipeline
     from padel_analyzer.engine import players as P
     from padel_analyzer.engine import points as PT
@@ -143,14 +92,10 @@ def main() -> None:
             calib = C.Calibration(g.H, (1920, 1080))
             video = first(f"/kaggle/input/**/videos/{name}.mp4")
             log(key, "frames", n, video)
-            hists = pipeline.sample_hists(video, det)
-            log(key, "hists", len(hists))
-            new = P.track(det, calib, hists)
-            keep = P._link_identity
-            P._link_identity = old_link_identity
-            old = P.track(det, calib, hists)
-            P._link_identity = keep
-            pipeline.sample_hists = lambda *a, **k: hists  # analyze() reuses them
+            feats = pipeline.sample_embeddings(video, det)
+            log(key, "embeddings", len(feats))
+            new = P.track(det, calib, feats)
+            pipeline.sample_embeddings = lambda *a, **k: feats  # analyze() reuses them
             rep = pipeline.analyze(det, calib, video)
             log(key, "report", rep["match"]["rallies"], "rallies", rep["match"]["hits"], "hits")
             states = json.loads(first(f"/kaggle/input/**/{name}/states.json").read_text())
@@ -203,15 +148,7 @@ def main() -> None:
                 y.append(int(winner_far == last_far))
                 meta.append({"frame": last["frame"], "winner_row": t["winner_row"], "far_row": far_row})
             rows[key] = (np.array(X), np.array(y), meta)
-            # identity: per labelled segment, does the predicted far pair match the truth (up to one relabelling)?
-            for nm, tk in (("old", old), ("new", new)):
-                o = orientation(tk, tk.segments)
-                pairs = [(o[i], truth_far_row[i]) for i in truth_far_row if i < len(o)]
-                agree = sum(a == b for a, b in pairs)
-                res["identity"].setdefault(key, {})[nm] = {"segments_checked": len(pairs),
-                                                          "correct": max(agree, len(pairs) - agree),
-                                                          "segments": len(tk.segments)}
-            log(key, "identity", json.dumps(res["identity"][key]), "point rows", len(y), "pos rate", float(np.mean(y)) if y else None)
+            log(key, "point rows", len(y), "pos rate", float(np.mean(y)) if y else None)
         except Exception:  # noqa: BLE001
             log("FAILED", key, traceback.format_exc()[-2500:])
 
@@ -225,9 +162,13 @@ def main() -> None:
         tk = P.track(det, calib)  # no shirts: slots 0,1 = far pair, so features use sides
         pos, bt, fps, n = tk.person_view().pos_m, B.track(det.ball), det.fps, det.n
         shots, rallies = rep["shots"], rep["rallies"]
-        for s in shots:  # team = side here (matches the shirt-free tracks)
-            if s.get("pos_m"):
-                s["team"] = 0 if s["pos_m"][1] < C.NET_Y else 1
+        # stored report predates the alternation step: redo the hitters; team = end here (shirt-free tracks)
+        slots = HT.assign([s["frame"] for s in shots], tk, B.track_for_events(det.ball).xy, fps)
+        for s, sl in zip(shots, slots):
+            s["player"], s["team"] = sl, 0 if sl < 2 else 1
+            p = pos[min(s["frame"], n - 1), sl]
+            if not np.isnan(p).any():
+                s["pos_m"] = [float(p[0]), float(p[1])]
         a_far = lambda t: 75 <= t < 299  # Coello/Tapia's end, from serve positions + changes of ends  # noqa: E731
         X, y, meta, prev = [], [], [], 0
         for p in lab:

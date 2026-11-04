@@ -1,0 +1,26 @@
+{
+  "name": "sportlens-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5180",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview --port 5180",
+    "lint:design": "../.claude/skills/impeccable/scripts/impeccable detect src ../frontend/src ../padel/web/src"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "postcss-prefix-selector": "^2.1.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  }
+}

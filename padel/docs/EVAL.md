@@ -230,3 +230,59 @@ Truth: for every camera segment with a scoreboard point, which pair plays the fa
 | **joint — DINOv2-S, production tracker (`players._link_identity`)** | **52 / 52** | **61 / 61** |
 
 Both parts are needed: a general appearance model (build, shorts, hair, not only the shirt hue) and a decision over all segments that compares far with far and near with near after removing each end's lighting / scale bias. The result is the same for switch penalties 0–1. (The §9 table's 52/52 and 43/61 for the old linker were scored with a less careful truth; on this truth the old linker gets 30/52 and 61/61.) Production: `pipeline.sample_embeddings` (DINOv2 ViT-S/14 via torch.hub, every 0.5 s per confident player crop); shirt histograms only if the model cannot be loaded (`quality.identity_features`). Not measured: which partner is which inside a pair (no public labels); Kuwait 2025 (its video cannot reach Kaggle).
+
+
+## 12. Who hit the ball: the two ends alternate (2026-10-30)
+
+`engine/hitter.py`: per hit, each slot's wrist-to-ball distance around the contact (as before), then a Viterbi pass over each rally with a penalty when two consecutive hits come from the same end (a side may touch the ball only once; no penalty after a > 2.5 s gap, where a hit may have been missed). Runs after the dead-ball rule, which needs the raw per-hit evidence; strokes are re-predicted for the hits whose hitter changed. Decorte `hit_assignments` (319 labelled hits, Vigo):
+
+| Same-end penalty | on annotated hits: player / pair | **on detected hits** (out-of-fold hit model): player / pair |
+| --- | --- | --- |
+| 0 (previous: each hit on its own) | 0.897 / 0.935 | 0.899 / 0.926 |
+| 0.3 | 0.916 / 0.952 | 0.933 / 0.966 |
+| **1.0 (production)** | 0.936 / 0.971 | **0.933 / 0.970** |
+| 2.0 | 0.939 / 0.981 | 0.940 / 0.977 |
+| 4.0 | — | 0.926 / 0.963 |
+
+Detected hits: 298 of the 319 labels have a predicted hit within ±6 frames (21 without are not scored). The penalty is taken from the middle of the stable 0.3–2 range rather than the best value, because all labels come from one tournament. The ball's direction just after the contact was also tried as evidence: no gain once alternation is used, removed.
+
+**Point winner retrained on this pipeline** (corrected hitters + §11 identity; `padel-points`, train on two matches, test on the third): women's final 68 % (majority 60 %), men's 70 % (57 %), Kuwait 71 % (50 %), **all 150 points 69 %** (majority 56 %). The previous 72 % was measured on the previous pipeline's features; the retrained model is the one that matches what production now produces and is installed.
+
+## 13. Club camera with low-bandwidth audio: Legends Arena (PlaySight), 2026-11-03
+
+Footage: Legends Arena Court 1, PlaySight camera, 1080p25, **AAC 8 kHz mono** (nothing above 4 kHz), 90 min with
+three separate playing sessions. The broadcast-trained audio CRNN found **0 hits** on it, and the fused hit model
+then trusted that silence, so most rallies were missed (39 rallies / 149 shots in a 27-minute session).
+
+Fix: the audio CRNN and the fused hit GBM are trained on band-limited copies too (`padel-audio` v2: each training
+crop drawn from full band, 16, 11 or 8 kHz; `padel-fusion` v2: 8 kHz out-of-fold audio rows added to the
+modality-dropout training set). Same 11-tournament folds as §4, test rallies band-limited to 8 kHz:
+
+| Held-out (tournament folds) | full band | **8 kHz** |
+| --- | --- | --- |
+| Audio CRNN peaks, ±250 ms F1 | 0.868 (was 0.817) | **0.866** |
+| Production hit model (fused + dropout), ±200 ms F1 | 0.942 | **0.943** |
+| … with every ball feature blanked (club camera worst case) | 0.938 | **0.943** |
+| … with no audio track | 0.781 | n/a |
+
+Other fixes from the same footage (labels: hand-checked hitter crops, `scripts/rescore_overheads.py`):
+
+- **Calibration**: the clicked near corners were off-screen (clicked on the frame edge): 0.53 m mean landmark
+  error, up to 1.05 m on the floor. Refit from ~1,100 points sampled on the painted lines and floor edges
+  (`court.py` landmarks → 3.5 cm).
+- **Near players cut off by the frame**: the box bottom is the frame edge, not the feet (the pose model also
+  invents ankles on the edge at conf ≈ 1). Placed from the shoulders at 1.45 m via the camera recovered from the
+  homography (`court.camera_model`, `players.floor_m`): median 0.73 m → 0.25 m on simulated cut-offs. Players
+  deeper than `quality.view_limit_y` (18.1 m here) are not visible at all.
+- **Smash**: 16 audited smash calls → 3–4 real overheads. A smash now needs the wrist above the head within
+  ±0.24 s of contact (`shots.arm_up` ≥ 0.11 body heights; real overheads 0.12–0.18, false calls ≤ 0.08); unseen
+  hitters get "other". 93 → 20 smashes on the old report, ~7/8 of the remaining calls with pose evidence correct.
+- **Hit precision** (20 random shots, old models): ~75–80 % real hits by the tagged player; stroke type right on
+  ~73 % of those.
+- **Hits dropped by the broadcast "court view" rule**: hits were kept only while ≥ 3 players were tracked (meant
+  for broadcast close-ups / replays). On this fixed camera (0 scene cuts) the near pair is often below the frame,
+  so the rule discarded hits in 57 % of session 1, including whole exchanges. It now applies only to videos with
+  scene cuts. Re-analysis reuses the previous run's detections (`job.detections`), so only the models after
+  detection run again.
+- Re-run with the 8 kHz audio models (court-view rule still on): session 1 39 → 45 rallies, 149 → 207 shots;
+  audio found 534 candidate hits (0 before).
