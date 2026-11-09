@@ -194,8 +194,15 @@ def track(det: Detections, calib: C.Calibration, hists: dict[tuple[int, int], np
     return PlayerTracks(pos, raw, box, kpt, seen, team, person, segments)
 
 
+END_CHANGE_GAP_S = 30.0
+
+
 def _split_on_side_change(raw: np.ndarray, segments: list[tuple[int, int]], fps: float) -> list[tuple[int, int]]:
-    """Teams change ends during breaks: a gap with no players for > 2 s starts a new segment."""
+    """Teams change ends during breaks: a gap with < 2 players on court for > END_CHANGE_GAP_S starts a new segment.
+
+    Shorter gaps are not a change of ends: a player fetching a ball outside the glass while the near pair stands
+    below a club camera's frame empties the court for a few seconds (Legends Arena: 2-9 s gaps, the pairs never
+    changed ends, and each split let the appearance linker swap the teams)."""
     present = (~np.isnan(raw[:, :, 0])).sum(1) >= 2
     out = []
     for a, b in segments:
@@ -206,7 +213,7 @@ def _split_on_side_change(raw: np.ndarray, segments: list[tuple[int, int]], fps:
                 g = f
                 while g < b and not present[g]:
                     g += 1
-                if g - f > 2 * fps and f > start:
+                if g - f > END_CHANGE_GAP_S * fps and f > start:
                     out.append((start, f))
                     start = g
                 f = g
@@ -268,6 +275,13 @@ def _orientation(seg: list[dict], lam: float = SWITCH_PENALTY) -> list[int]:
     idx = [k for k in range(len(seg)) if ok[k]]
     if len(idx) < 2:
         return [0] * len(seg)
+    if len(idx) == 2:
+        # centring on the end means of two segments makes them exact opposites, so S below would always read
+        # "swapped": compare directly instead (the far / near look bias then favours "same ends", the safe side)
+        a, b = seg[idx[0]], seg[idx[1]]
+        same = feature_dist(a["F"], b["F"]) + feature_dist(a["N"], b["N"])
+        swapped = feature_dist(a["F"], b["N"]) + feature_dist(a["N"], b["F"])
+        return _fill_orientation(len(seg), idx, [0, int(swapped < same)])
     Fm = np.mean([seg[k]["F"] for k in idx], 0)
     Nm = np.mean([seg[k]["N"] for k in idx], 0)
     Fc = np.array([seg[k]["F"] - Fm for k in idx])
@@ -288,10 +302,15 @@ def _orientation(seg: list[dict], lam: float = SWITCH_PENALTY) -> list[int]:
     for ch in reversed(back):
         st = 1 - st if ch[st] else st
         path.append(st)
-    lab = dict(zip(idx, path[::-1]))
+    return _fill_orientation(len(seg), idx, path[::-1])
+
+
+def _fill_orientation(n_seg: int, idx: list[int], states: list[int]) -> list[int]:
+    """States of the usable segments -> every segment (unusable ones keep the previous orientation)."""
+    lab = dict(zip(idx, states))
     flip = lab[idx[0]]  # the first usable segment's far pair is team 0
-    o, cur = [], lab[idx[0]] ^ flip
-    for k in range(len(seg)):
+    o, cur = [], 0
+    for k in range(n_seg):
         cur = (lab[k] ^ flip) if k in lab else cur
         o.append(cur)
     return o

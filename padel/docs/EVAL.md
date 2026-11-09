@@ -311,3 +311,16 @@ Other fixes from the same footage (labels: hand-checked hitter crops, `scripts/r
   pick-ups). In the pipeline (stricter: far from everyone) it removed 18/14/7 hits (shots 436/338/252 →
   407/329/248). Fresh 20-shot audit: 14/20 real hits by the credited player — inside the 65–75 % range of the
   earlier samples; the remaining misses are players in the ready position while the ball is not visible.
+
+## 14. Team swaps on a fixed club camera (Legends Arena, 2026-11-09)
+
+Reported by the user from the shared report: team A appeared to hit from both halves. Frames around the split showed
+the same pairs at the same ends throughout. Cause: `players._split_on_side_change` started a new segment whenever
+< 2 players were tracked for > 2 s (one player fetching the ball outside the glass while the near pair stood below
+the frame: 2–9 s), and `_orientation` with exactly two usable segments always answered "swapped" (centring on the
+two segments' end means makes their features exact opposites, so the agreement score is ≤ 0). Session 1 (5
+segments, 2 usable) swapped at 9.9 min; session 3 swapped for 14.9–15.9 min; session 2 by luck not.
+Fix: a possible change of ends needs ≥ 30 s with < 2 players on court (`END_CHANGE_GAP_S`); two usable segments are
+compared directly (same vs swapped feature distance, biased to "same ends"). Sessions 1/2/3 → 1 segment each;
+unit tests for both cases. PT100 / Kuwait are unaffected: their segments come from scene cuts.
+Open: a real change of ends on a fixed camera with players visible while they walk round the net is not split.

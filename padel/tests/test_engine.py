@@ -198,3 +198,26 @@ def test_hitter_sequence_fixes_a_lone_wrong_end():
     tracks = SimpleNamespace(box=box, kpt=kpt)
     assert HT.assign(frames, tracks, ball, 30.0, same_end=0.0)[2] == 2
     assert HT.assign(frames, tracks, ball, 30.0) == [0, 2, 0, 2, 0]
+
+
+def test_orientation_two_segments_keeps_the_ends():
+    """Two segments, same ends, far and near look very different: centring would have flipped the second one."""
+    rng = np.random.default_rng(1)
+    pair_a, pair_b = rng.normal(size=32), rng.normal(size=32)
+    far_light, near_light = 3 * rng.normal(size=32), 3 * rng.normal(size=32)
+    seg = [{"F": pair_a + far_light + 0.3 * rng.normal(size=32), "N": pair_b + near_light + 0.3 * rng.normal(size=32),
+            "w": 10} for _ in range(2)]
+    assert P._orientation(seg) == [0, 0]
+    # a real change of ends is still found when the pairs differ more than the two ends' lighting
+    seg[1]["F"], seg[1]["N"] = pair_b + 0.2 * far_light, pair_a + 0.2 * near_light
+    seg[0]["F"], seg[0]["N"] = pair_a + 0.2 * far_light, pair_b + 0.2 * near_light
+    assert P._orientation(seg) == [0, 1]
+
+
+def test_short_empty_court_is_not_a_change_of_ends():
+    fps = 25.0
+    raw = np.zeros((int(fps * 120), 4, 2))
+    raw[int(fps * 30):int(fps * 39), :, :] = np.nan  # 9 s with nobody tracked (ball fetched, near pair off-frame)
+    assert P._split_on_side_change(raw, [(0, len(raw))], fps) == [(0, len(raw))]
+    raw[int(fps * 60):int(fps * 100), :, :] = np.nan  # 40 s break: may be a change of ends
+    assert len(P._split_on_side_change(raw, [(0, len(raw))], fps)) == 2
