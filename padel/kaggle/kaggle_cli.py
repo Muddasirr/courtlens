@@ -58,7 +58,7 @@ KERNELS = {
         "enable_gpu": True,
         "kernel_sources": [f"{USER}/padel-gpu-train", f"{USER}/padel-gpu-pose", f"{USER}/padel-stroke-rgb",
                            f"{USER}/padel-eval", f"{USER}/padel-venues", f"{USER}/padel-fusion",
-                           f"{USER}/padel-audio", f"{USER}/padel-points"],
+                           f"{USER}/padel-audio", f"{USER}/padel-points", f"{USER}/padel-ball-selftrain"],
         "dataset_sources": [f"{USER}/padel-code", f"{USER}/padel-jobs"],
     },
     "eval": {
@@ -89,6 +89,13 @@ KERNELS = {
         "kernel_sources": [f"{USER}/padel-decorte-prep", f"{USER}/padel-pt100-prep", f"{USER}/padel-gpu-pose",
                            f"{USER}/padel-venues"],
         "dataset_sources": [f"{USER}/padel-code"],
+    },
+    "selftrain": {
+        "slug": "padel-ball-selftrain",
+        "code_file": "padel_selftrain.py",
+        "enable_gpu": True,
+        "kernel_sources": [f"{USER}/padel-venues"],
+        "dataset_sources": [f"{USER}/padel-legends-balltiles"],
     },
     "fusion": {
         "slug": "padel-fusion",

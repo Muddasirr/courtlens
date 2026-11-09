@@ -59,3 +59,38 @@ def assign(frames: list[int], tracks, ball_xy: np.ndarray, fps: float, same_end:
         out[i:j + 1] = path[::-1]
         i = j + 1
     return out
+
+
+# A hit needs the ball within reach of somebody. On a club camera with a 3-court venue (audio from the next
+# courts) the hit model fires while players stand, walk or sit on the bench; Legends Arena audit: of 20 hits whose
+# ball was > 3 body heights from the credited player, 17 were no hit at all (docs/EVAL.md §13).
+REACH_BODY_HEIGHTS = 3.0  # box grown by a racket's reach (0.5 body height), then this many body heights
+
+
+def out_of_reach(hits, ball_xy: np.ndarray, boxes: np.ndarray, image_h: int, window: int = 3) -> list[bool]:
+    """Per hit: True when the ball is visible near contact and out of reach of every visible player.
+    boxes: (n, 4, 4) xyxy per slot (nan = not detected). Kept (False) whenever it cannot be decided: no ball near
+    the contact, or a player is cut off by / missing below the bottom of the frame while the ball is low."""
+    n = len(ball_xy)
+    out = []
+    for h in hits:
+        f = h.frame
+        bp = next((ball_xy[f + k] for k in (0, -1, 1, -2, 2, -window, window)
+                   if 0 <= f + k < n and np.isfinite(ball_xy[f + k, 0])), None)
+        if bp is None:
+            out.append(False)
+            continue
+        b = boxes[f]
+        seen = ~np.isnan(b[:, 0])
+        near_hidden = (~seen[2:]).any() or (b[2:, 3][seen[2:]] >= image_h - 4).any()
+        if bp[1] > 0.6 * image_h and near_hidden:
+            out.append(False)
+            continue
+        best = np.inf
+        for x0, y0, x1, y1 in b[seen]:
+            hgt = max(y1 - y0, 30.0)
+            dx = max(x0 - 0.5 * hgt - bp[0], 0.0, bp[0] - (x1 + 0.5 * hgt))
+            dy = max(y0 - 0.5 * hgt - bp[1], 0.0, bp[1] - y1)
+            best = min(best, float(np.hypot(dx, dy)) / hgt)
+        out.append(bool(seen.any()) and best > REACH_BODY_HEIGHTS)
+    return out

@@ -286,3 +286,28 @@ Other fixes from the same footage (labels: hand-checked hitter crops, `scripts/r
   detection run again.
 - Re-run with the 8 kHz audio models (court-view rule still on): session 1 39 → 45 rallies, 149 → 207 shots;
   audio found 534 candidate hits (0 before).
+- **Ball gate for low-confidence cameras** (2026-11-04): the display/measurement track used `min_conf` 0.35 (tuned on
+  PT100 broadcast). On this camera 24/24 audited points added at 0.2 were the ball; 0.1 adds dead balls by the net.
+  The pipeline now re-tracks at 0.2 when < 20 % of frames have the ball (`quality.ball_min_conf`). Sessions 1/2/3:
+  ball seen 10.3/12.7/10.8 % → 28.8/30.1/22.4 %; shots with a measured speed and bounce 9/9/7 → 37/41/24
+  (median 54/51/56 km/h). Hits and rallies unchanged (they use the recall-oriented event track).
+- Not adopted: re-assigning the hitter to the partner with the larger wrist movement. Pose jitter makes the signal
+  unreliable (a real hitter scored 0.30 vs the partner's 15.4) and it would flip correct shots.
+- **Venue self-trained ball model** (2026-11-05/06, `scripts/build_ball_selftrain.py`, kernel `padel-ball-selftrain`,
+  no hand labels). Pseudo-labels = moving points of the ball track (min_conf 0.2); hard negatives at detection
+  hotspots (spare balls by the net, bench/spectators, logo) and in the top band (signs). Held-out last 2.5 min of
+  session 3: ball in flight tracked 8.5 % → 14.0 % of frames; 24 audited new detections: 0 look-alikes (round 1,
+  which also labelled spare balls: 7/24 false — logo, sign, spectators, glass, dead balls). Used per venue only
+  (`calibration.ball_model = "legends"`, infer `ball_legends.pt`); a different ball model re-runs detection.
+  Sessions 1/2/3: ball seen 28.8/30.1/22.4 % → 48.4/45.4/35.1 %; shots with speed + bounce 37/41/24 → 71/60/39
+  (median 55/54/54 km/h); shots 438/326/219 → 436/338/252.
+- Shot precision did not move with the ball model: 13/20 real hits by the tagged player (earlier sample 15/20).
+  The misses are idle / walking players tagged as the hitter and between-point ball pick-ups — hit attribution,
+  not ball detection, is now the limit.
+- **Out-of-reach hits** (2026-11-07/09, `hitter.out_of_reach`, `quality.hits_out_of_reach`): a hit is dropped when
+  the ball is visible near the contact and > 3 body heights (box grown by a racket's reach) from every visible
+  player, unless the ball is low while a near player is cut off / out of view. Offline on session 1, 17/20 hits
+  flagged by distance from the credited player were no hit (standing / walking players, bench spectators, ball
+  pick-ups). In the pipeline (stricter: far from everyone) it removed 18/14/7 hits (shots 436/338/252 →
+  407/329/248). Fresh 20-shot audit: 14/20 real hits by the credited player — inside the 65–75 % range of the
+  earlier samples; the remaining misses are players in the ready position while the ball is not visible.

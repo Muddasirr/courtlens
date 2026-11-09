@@ -25,7 +25,7 @@ export default function Court({ players, names, highlight, marks, landmarks, act
   return (
     <svg viewBox="-1.2 -1.2 12.4 22.4" style={{ height, width: 'auto', maxWidth: '100%', display: 'block', margin: '0 auto' }}
       role="img" aria-label="Padel court, top-down">
-      <rect x={-1.2} y={-1.2} width={12.4} height={22.4} rx={0.4} fill="var(--surface-2)" />
+      <rect x={-1.2} y={-1.2} width={12.4} height={22.4} rx={0.4} fill="color-mix(in srgb, var(--court) 55%, var(--surface-2))" />
       <rect x={0} y={0} width={W} height={L} fill="var(--court)" />
       <g stroke="var(--court-line)" strokeWidth={0.06} fill="none">
         <line x1={0} y1={SERVICE[0]} x2={W} y2={SERVICE[0]} />
@@ -54,7 +54,7 @@ export default function Court({ players, names, highlight, marks, landmarks, act
         p ? (
           <g key={i} transform={`translate(${p[0]} ${p[1]})`}>
             <circle r={0.62} fill={teamColor(i < 2 ? 0 : 1)} stroke="var(--surface-1)" strokeWidth={0.08} />
-            <text y={0.2} textAnchor="middle" fontSize={0.56} fontWeight={700} fill="#fff">{playerTag(i)}</text>
+            <text y={0.2} textAnchor="middle" fontSize={0.56} fontWeight={700} fill={i < 2 ? 'var(--team-a-ink)' : 'var(--team-b-ink)'}>{playerTag(i)}</text>
             <title>{names?.[i] ?? playerTag(i)}</title>
           </g>
         ) : null,

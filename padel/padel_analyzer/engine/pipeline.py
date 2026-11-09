@@ -18,6 +18,7 @@ from .detect import Detections, Detector
 from .events import HitModel
 from .shots import CLASSES, ShotModel
 
+LOW_BALL_COVERAGE = 0.2  # share of frames with the ball below which the low-confidence ball gate is tried
 REPLAY_HZ = 5
 MODEL_DIR = Path(__file__).resolve().parents[2] / "models"
 VERSION = "padel-0.1"
@@ -146,6 +147,14 @@ def analyze(det: Detections, calib: C.Calibration, video: str | Path | None = No
     tracks = slot_tracks.person_view()
     prog("ball", 0)
     bt = B.track(det.ball)  # precise: what the report shows
+    ball_min_conf = 0.35
+    if bt.observed.mean() < LOW_BALL_COVERAGE:
+        # club cameras score the ball lower than broadcast (small, blurred): the 0.35 gate tuned on PT100 kept
+        # 10 % of Legends Arena frames; 0.2 keeps 29 % and a visual audit found 24/24 of the added points to be
+        # the ball (0.1 adds dead balls by the net). Trajectory filtering still drops static look-alikes.
+        low = B.track(det.ball, min_conf=0.2)
+        if low.observed.mean() > bt.observed.mean():
+            bt, ball_min_conf = low, 0.2
     bt_ev = B.track_for_events(det.ball)  # recall-oriented: what hit / stroke features see
     prog("hits", 0)
     aud, n_audio_hits = audio_features(video, det)
@@ -154,6 +163,9 @@ def analyze(det: Detections, calib: C.Calibration, video: str | Path | None = No
         video_only = MODEL_DIR / "hit_lgbm_video.txt"
         hit_model = HitModel(video_only) if aud is None and video_only.exists() else HitModel()
     hits, hit_score = hit_model.detect(bt_ev, slot_tracks, audio=aud)
+    far = HT.out_of_reach(hits, bt_ev.xy, slot_tracks.box, det.size[1])
+    n_out_of_reach = int(sum(far))
+    hits = [h for h, x in zip(hits, far) if not x]
     # broadcast replays / close-ups: a hit can only be measured while the main court view is on screen
     # (≥ 3 players tracked around it). Only for videos that cut away: a fixed club camera never leaves the
     # court, but its near pair often stands below the frame, and this rule then dropped real hits in 57 % of a
@@ -281,6 +293,8 @@ def analyze(det: Detections, calib: C.Calibration, video: str | Path | None = No
         "audio_used": aud is not None,
         "audio_hits": n_audio_hits,
         "calibration_reproj_m": calib.reproj_m,
+        "ball_min_conf": ball_min_conf,
+        "hits_out_of_reach": n_out_of_reach,
         "view_limit_y": (round(C.view_limit_y(calib), 2) if C.view_limit_y(calib) is not None else None),
         "analysis_s": round(time.time() - t0, 1),
     }

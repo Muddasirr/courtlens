@@ -1,21 +1,21 @@
 @import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Barlow:wght@400;500;600;700&display=swap");
 
-/* Matchday portal — navy / chalk / kit red. Pitch green only on the pitch map. */
+/* Matchday portal: pitch-black / chalk / kit red, pitch green for actions and the pitch map (SportLens turf palette). */
 :root {
-  --bg: #eef1f4;
-  --bg-deep: #e4e9ef;
+  --bg: #f1f3ee;
+  --bg-deep: #e5e9e1;
   --surface: #ffffff;
-  --ink: #0a1628;
-  --muted: #5c6b7a;
-  --line: #d0d7e0;
-  --line-strong: #a8b3c0;
+  --ink: #0f1c14;
+  --muted: #56625a;
+  --line: #d3d9cf;
+  --line-strong: #aab4a6;
   --signal: #c8102e;
   --signal-ink: #ffffff;
-  --navy: #0a1628;
-  --pitch: #1b7a3d;
+  --navy: #0f1c14;
+  --pitch: #146c35;
   --danger: #c8102e;
   --ok: #0d7a3f;
-  --board: #f4f6f8;
+  --board: #f5f6f2;
   --radius: 2px;
   font-family: "Barlow", system-ui, sans-serif;
   color: var(--ink);
@@ -110,7 +110,7 @@ a:hover {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  box-shadow: 0 1px 2px rgba(10, 22, 40, 0.05);
+  box-shadow: 0 1px 2px rgba(15, 28, 20, 0.05);
   padding: 1.1rem 1.15rem;
   margin-bottom: 0.85rem;
 }
@@ -357,7 +357,7 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 1px 2px rgba(10, 22, 40, 0.05);
+  box-shadow: 0 1px 2px rgba(15, 28, 20, 0.05);
   padding: 1.15rem 1.2rem 1rem;
   margin-bottom: 0.85rem;
 }
@@ -461,7 +461,7 @@ button:disabled {
 }
 
 .bc-stat.is-pass .bc-stat-value {
-  color: #9fd4ff;
+  color: #b9e842;
 }
 
 .bc-stat-label {
@@ -650,7 +650,7 @@ button:disabled {
 
 .bc-table tbody tr:hover,
 .bc-table tbody tr.is-selected {
-  background: #e8eef8;
+  background: #e6efe3;
 }
 
 .bc-table tbody tr.is-selected .bc-player-name {
@@ -717,7 +717,7 @@ button:disabled {
   gap: 0.35rem;
   padding: 0.2rem 0.4rem;
   border-radius: 2px;
-  background: rgba(10, 22, 40, 0.72);
+  background: rgba(15, 28, 20, 0.72);
   color: #fff;
   font-family: "Barlow Condensed", sans-serif;
   font-size: 0.68rem;
@@ -730,7 +730,7 @@ button:disabled {
   width: 4.2rem;
   height: 0.35rem;
   border-radius: 1px;
-  background: linear-gradient(90deg, #38bdf8, #facc15, #f97316, #ef4444);
+  background: linear-gradient(90deg, #a3e635, #facc15, #f97316, #ef4444);
 }
 
 .bc-heat-caption {
@@ -785,7 +785,7 @@ button:disabled {
   display: grid;
   place-items: center;
   padding: 1.25rem;
-  background: rgba(10, 22, 40, 0.88);
+  background: rgba(15, 28, 20, 0.88);
 }
 
 .bc-lightbox-close {
@@ -989,7 +989,7 @@ button:disabled {
 }
 
 .bc-moment-type.pass {
-  background: #c8e4ff;
+  background: #d8efc6;
 }
 
 .bc-moment-type.shot {
@@ -1139,7 +1139,7 @@ button:disabled {
 }
 
 /* Staff identity board */
-.id-group { border-top: 1px solid var(--line, #dde3ea); padding: 0.75rem 0; }
+.id-group { border-top: 1px solid var(--line, #d3d9cf); padding: 0.75rem 0; }
 .id-group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
 .id-group-head .muted { color: var(--muted); font-size: 0.85rem; }
 .id-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 0.5rem; }

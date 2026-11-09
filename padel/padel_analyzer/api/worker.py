@@ -79,6 +79,7 @@ def _run(match_id: str) -> None:
             return
         video = MATCH_DIR / m.id / m.filename
         calib = C.Calibration.from_dict(m.calibration)
+        calib_extra = dict(m.calibration)
     folder = MATCH_DIR / match_id
     last = {"p": -1.0}
 
@@ -92,7 +93,7 @@ def _run(match_id: str) -> None:
     try:
         _update(match_id, status="processing", stage="detect", progress=0.0)
         if BACKEND == "kaggle":
-            report = _run_on_kaggle(match_id, video, calib, folder, progress)
+            report = _run_on_kaggle(match_id, video, calib, folder, progress, calib_extra)
         else:
             report = pipeline.run(video, calib, detector, max_frames=MAX_FRAMES, progress=progress,
                                   det_cache=folder / "detections.npz")
@@ -103,7 +104,8 @@ def _run(match_id: str) -> None:
         _update(match_id, status="failed", error=f"{exc}\n{traceback.format_exc()[-1500:]}")
 
 
-def _run_on_kaggle(match_id: str, video: Path, calib: C.Calibration, folder: Path, progress) -> dict:
+def _run_on_kaggle(match_id: str, video: Path, calib: C.Calibration, folder: Path, progress,
+                   calib_extra: dict | None = None) -> dict:
     """Upload video + calibration as a padel-jobs dataset version, run the padel-infer GPU kernel,
     download its report. The local machine only moves files."""
     import os
@@ -129,8 +131,18 @@ def _run_on_kaggle(match_id: str, video: Path, calib: C.Calibration, folder: Pat
     except OSError:
         shutil.copy(video, job_dir / vname)
     job = {"match_id": match_id, "video": vname, "calibration": calib.to_dict(), "max_frames": MAX_FRAMES}
+    # venue ball model, stored with the camera's calibration (e.g. "legends"); "base" = the general model
+    ball_model = (calib_extra or {}).get("ball_model") or "base"
+    job["ball_model"] = ball_model
     prev_det = folder / "detections.npz"
-    if prev_det.exists():  # re-analysis: skip detection on the GPU (the bulk of the run)
+    prev_rep = folder / "report.json"
+    prev_model = "base"
+    if prev_rep.exists():
+        try:
+            prev_model = json.loads(prev_rep.read_text()).get("quality", {}).get("ball_model") or "base"
+        except ValueError:
+            prev_model = "?"
+    if prev_det.exists() and prev_model == ball_model:  # re-analysis: skip detection on the GPU (the bulk)
         dname = f"{match_id}_{int(time.time())}_det.npz"
         try:
             os.link(prev_det, job_dir / dname)

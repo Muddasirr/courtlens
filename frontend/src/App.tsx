@@ -406,8 +406,8 @@ function formatMatchClock(ms: number): string {
 }
 
 function heatFill(v: number): string {
-  // Cold → hot over grass (Opta-style)
-  if (v < 0.2) return `rgba(56, 189, 248, ${0.15 + v * 0.55})`;
+  // Cold → hot over grass (Opta-style): lime → yellow → orange → red
+  if (v < 0.2) return `rgba(163, 230, 53, ${0.15 + v * 0.55})`;
   if (v < 0.45) return `rgba(250, 204, 21, ${0.28 + v * 0.45})`;
   if (v < 0.7) return `rgba(249, 115, 22, ${0.4 + v * 0.4})`;
   return `rgba(239, 68, 68, ${0.5 + v * 0.45})`;

@@ -245,7 +245,7 @@ const VideoOverlay = ({ ref, src, rep, idx, onTime }: {
     const sx = c.width / W
     const sy = c.height / H
     const style = getComputedStyle(c) // team colours are scoped to the padel UI, not :root, inside SportLens
-    ctx.font = `600 ${13 * dpr}px system-ui`
+    ctx.font = `700 ${15 * dpr}px 'Barlow Condensed', system-ui`
     ctx.textAlign = 'center'
     rep.replay.players[idx]?.forEach((p, i) => {
       if (!p) return
@@ -258,7 +258,7 @@ const VideoOverlay = ({ ref, src, rep, idx, onTime }: {
       ctx.beginPath()
       ctx.roundRect(x * sx - w / 2, ty, w, 18 * dpr, 4 * dpr)
       ctx.fill()
-      ctx.fillStyle = '#fff'
+      ctx.fillStyle = style.getPropertyValue(i < 2 ? '--team-a-ink' : '--team-b-ink') || '#fff'
       ctx.fillText(tag, x * sx, ty + 13 * dpr)
     })
     const b = rep.replay.ball_px[idx]
@@ -374,7 +374,7 @@ function PlayerCard({ p, rows, readOnly, onRename }: { p: Player; rows: Row[]; r
   return (
     <article className="card player">
       <header className="player-head">
-        <span className="player-tag" style={{ background: teamColor(p.team) }}>{playerTag(p.id)}</span>
+        <span className={`player-tag team-${p.team}`} style={{ background: teamColor(p.team) }}>{playerTag(p.id)}</span>
         <h3>
           {readOnly ? p.name : (
             <input className="name-input" defaultValue={p.name} aria-label={`Name of player ${playerTag(p.id)}`}
@@ -411,7 +411,7 @@ function PlayerCard({ p, rows, readOnly, onRename }: { p: Player; rows: Row[]; r
         </div>
         <div>
           <h4>Where they stood</h4>
-          <Heatmap grid={p.heatmap} size={170} />
+          <Heatmap grid={p.heatmap} size={170} id={`heat-${p.id}`} />
         </div>
       </div>
       {rows.length > 0 && (
@@ -474,7 +474,7 @@ function Pairs({ rep, names, readOnly, review, seek }: {
         {rep.teams.map((t, i) => (
           <article className="card stack" key={t.id}>
             <header className="player-head">
-              <span className="player-tag" style={{ background: teamColor(t.id) }}>{t.id === 0 ? 'A' : 'B'}</span>
+              <span className={`player-tag team-${t.id}`} style={{ background: teamColor(t.id) }}>{t.id === 0 ? 'A' : 'B'}</span>
               <h3>
                 {readOnly ? t.name : (
                   <input className="name-input" defaultValue={t.name} aria-label={`Name of ${t.name}`}

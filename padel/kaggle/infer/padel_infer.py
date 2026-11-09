@@ -74,6 +74,9 @@ def main() -> None:
         "stroke_rgb.pt": "/kaggle/input/**/stroke_rgb.pt",
         # shot_types.pt (padelcnn detector) is NOT loaded: zero detections on PT100 broadcast or club footage (EVAL §5)
         "audio_hit.pt": "/kaggle/input/**/padel-audio/out/models/audio_hit.pt",
+        # venue ball models (self-trained on that venue's own footage, padel-ball-selftrain): used only by jobs
+        # whose camera asks for them (job["ball_model"]); everyone else keeps ball.pt
+        "ball_legends.pt": "/kaggle/input/**/padel-ball-selftrain/out/models/ball_venue/best.pt",
         # point winner (scoreboard-labelled PT100 finals + Kuwait 2025; EVAL §9)
         "point_lgbm.txt": "/kaggle/input/**/padel-points/out/models/point_lgbm.txt",
         "point_lgbm.json": "/kaggle/input/**/padel-points/out/models/point_lgbm.json",
@@ -91,7 +94,15 @@ def main() -> None:
     jobs_file = first("/kaggle/input/**/padel-jobs/**/job.json") or first("/kaggle/input/**/job.json")
     jobs = json.loads(jobs_file.read_text())
     log("jobs", [j["match_id"] for j in jobs])
-    det = Detector(device="cuda", pose_stride=1)
+    detectors: dict[str, Detector] = {}
+
+    def detector_for(name: str):
+        w = models / f"ball_{name}.pt"
+        key = name if name != "base" and w.exists() else "base"
+        if key not in detectors:
+            detectors[key] = Detector(ball_w=str(w) if key != "base" else None, device="cuda", pose_stride=1)
+        return key, detectors[key]
+
     for job in jobs:
         out = Path("/kaggle/working") / job["match_id"]
         out.mkdir(parents=True, exist_ok=True)
@@ -105,10 +116,13 @@ def main() -> None:
                 if cached:
                     shutil.copy(cached, out / "detections.npz")
                     log("reusing detections", cached)
+            ball_model, det = detector_for(job.get("ball_model") or "base")
+            log("ball model", ball_model)
             rep = pipeline.run(video, C.Calibration.from_dict(job["calibration"]), det,
                                max_frames=job.get("max_frames", 0), det_cache=out / "detections.npz",
                                progress=lambda s, p: None)
             rep["quality"]["models"] = sorted(p.name for p in models.iterdir())
+            rep["quality"]["ball_model"] = ball_model
             (out / "report.json").write_text(json.dumps(rep))
             log("done", job["match_id"], rep["match"]["rallies"], "rallies", rep["match"]["hits"], "hits")
         except Exception:  # noqa: BLE001
