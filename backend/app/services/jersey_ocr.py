@@ -65,7 +65,6 @@ def read_jersey_number(frame, xyxy: list[float]) -> dict[str, Any] | None:
     """Return {number, confidence} or None from a person bbox on a video frame."""
     if not jersey_ocr_enabled():
         return None
-    import cv2
 
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = [int(v) for v in xyxy]

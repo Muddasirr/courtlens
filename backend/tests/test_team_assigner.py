@@ -12,7 +12,7 @@ def _solid_crop(bgr, h=80, w=40):
 
 
 def test_jersey_bgr_separates_red_and_white():
-    from app.services.team_assigner import TeamAssigner, jersey_bgr_from_crop
+    from app.services.team_assigner import jersey_bgr_from_crop
 
     red = jersey_bgr_from_crop(_solid_crop((40, 40, 200)))
     white = jersey_bgr_from_crop(_solid_crop((220, 220, 220)))

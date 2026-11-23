@@ -435,7 +435,6 @@ def _team_colour_separation(metas: list[dict]) -> dict[str, Any] | None:
 
 
 def descriptor_from_frame_box(frame_bgr, xyxy: list[float]) -> dict[str, float] | None:
-    import cv2
 
     h, w = frame_bgr.shape[:2]
     x1, y1, x2, y2 = [int(v) for v in xyxy]

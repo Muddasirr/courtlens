@@ -1,0 +1,4 @@
+# Test and lint tooling. Install after requirements.txt (and CPU torch, see README).
+pytest>=8
+motmetrics>=1.4.0  # MOT benchmark scoring used by tests/test_bench_mot.py
+ruff==0.17.6
