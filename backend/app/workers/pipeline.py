@@ -16,7 +16,6 @@ from app.models import (
     EventObservation,
     EventParticipant,
     HighlightClip,
-    Match,
     MatchEvent,
     ModelVersion,
     Player,
