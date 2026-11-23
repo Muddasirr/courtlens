@@ -78,7 +78,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt -r requirements-dev.txt
 pip install --no-deps ultralytics-opencv-headless
 ruff check .
-pytest tests -q        # 118 tests, about 20 s on CPU
+python -m pytest tests -q   # 118 tests, about 20 s on CPU
 
 cd ../frontend
 yarn install --frozen-lockfile
