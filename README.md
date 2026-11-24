@@ -5,8 +5,6 @@
 
 Post-match analytics for futsal facilities. Upload a match from one to four fixed cameras and CourtLens tracks every player and the ball, splits the teams, works out possession, passes and shots, and builds per-player stats and heatmaps. Facility staff review it before anything is published.
 
-> **TODO(Muddasir): screenshots.** Add `docs/review.png` (the review screen with a match's events and a player list) and `docs/heatmap.png` (one player's heatmap and stat card). A 10-second GIF of the tracking overlay on real footage would be the strongest single image.
-
 <!-- ![Review screen](docs/review.png) -->
 
 ## Why I built it
@@ -91,7 +89,6 @@ yarn lint && yarn build
 - **Team split is a data problem more than a model problem.** Whole-body SigLIP embeddings got 7 of 12 hand-labelled CCTV players right. Torso colour as the primary signal, with SigLIP at 0.25 weight, got 11 of 12. Adding a zero-shot filter for spectators and coaches raised team accuracy from 64% to 96% on a labelled match and fixed possession splits that had been skewed to 76/24.
 - **A wrong number is worse than no number.** Jersey-number reading scored 7% with Tesseract, 1% with TrOCR, and 11% with a trained classifier on SoccerNet. Rather than ship guesses, automatic numbers are off and staff rename players, with the classifier available behind a flag.
 - **Tracking is still the weakest link.** Offline track stitching raised IDF1 from 0.46 to 0.58 on SoccerTrack. I tried FP16 inference for an 8–18% speed-up, but it cost 0.02 IDF1, so I kept FP32.
-- TODO(Muddasir): add the hardest bug or design decision from building the review and publish flow, which the docs don't cover.
 
 ## Limitations and roadmap
 
